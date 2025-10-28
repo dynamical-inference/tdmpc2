@@ -1,6 +1,10 @@
 """
-Activation recorder for mechanistic interpretability of TD-MPC2 agents.
-Records latent states, actions, and observations during episode execution.
+Episode data recorder for mechanistic interpretability of TD-MPC2 agents.
+Records latent states, actions, observations, and rewards during episode execution
+and saves them to disk for offline analysis.
+
+This recorder captures data explicitly via a wrapper (no PyTorch hooks).
+For real-time activation patching/modification, see activation_patcher.py.
 """
 
 import numpy as np
@@ -11,12 +15,19 @@ import pickle
 import json
 
 
-class ActivationRecorder:
+class EpisodeDataRecorder:
     """
-	Records activations during agent execution for mechanistic interpretability.
-	
-	Level 1: Records latent states, actions, observations, and rewards.
-	"""
+    Records episode data for mechanistic interpretability analysis.
+    
+    Captures latent states, actions, observations, and rewards during episodes
+    and saves them to disk as .pkl files for offline analysis.
+    
+    Note: Uses explicit capture via wrapper (no PyTorch hooks).
+    If using with ActivationPatcher, this will automatically capture the
+    MODIFIED activations after patches are applied.
+    
+    Level 1: Records latent states, actions, observations, and rewards.
+    """
 
     def __init__(self, cfg, save_dir=None):
         """
@@ -37,7 +48,7 @@ class ActivationRecorder:
         # Episode counter
         self.episode_idx = 0
 
-        print(f"ActivationRecorder initialized. Saving to: {self.save_dir}")
+        print(f"EpisodeDataRecorder initialized. Saving to: {self.save_dir}")
 
     def reset_episode(self):
         """Reset storage for a new episode."""
@@ -153,10 +164,14 @@ class ActivationRecorder:
         }
 
 
-class ActivationRecorderWrapper:
+class EpisodeDataRecorderWrapper:
     """
-	Wrapper around TD-MPC2 agent that records activations during act().
-	"""
+    Wrapper around TD-MPC2 agent that captures episode data during act().
+    
+    Explicitly calls model.encode() and captures the latent state for recording.
+    Compatible with ActivationPatcher: if patches are active, this will capture
+    the MODIFIED latent state after patches have been applied.
+    """
 
     def __init__(self, agent, recorder):
         """
@@ -224,7 +239,6 @@ class ActivationRecorderWrapper:
         self._last_latent = latent_state.detach()
 
         # Get action (either via planning or policy)
-        # NOTE(Rodrigo): I think by policy here we mean not using MPC, and I guess this is the baseline?
         if self.agent.cfg.mpc:
             action = self.agent.plan(obs_tensor,
                                      t0=t0,
