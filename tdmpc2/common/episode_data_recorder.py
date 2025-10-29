@@ -38,17 +38,21 @@ class EpisodeDataRecorder:
 			save_dir: Directory to save recordings (default: analysis/activations)
 		"""
         self.cfg = cfg
-        self.save_dir = Path(save_dir) if save_dir else Path(
-            'analysis/activations')
-        self.save_dir.mkdir(parents=True, exist_ok=True)
 
+        if save_dir is not None:
+            self.save_dir = Path(save_dir) if save_dir else Path(
+                'analysis/activations')
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            print(
+                f"EpisodeDataRecorder initialized. Saving to: {self.save_dir}")
+        else:
+            print(
+                "EpisodeDataRecorder initialized. No save directory provided.")
         # Storage for current episode
         self.reset_episode()
 
         # Episode counter
         self.episode_idx = 0
-
-        print(f"EpisodeDataRecorder initialized. Saving to: {self.save_dir}")
 
     def reset_episode(self):
         """Reset storage for a new episode."""
@@ -162,136 +166,3 @@ class EpisodeDataRecorder:
             'latent_states': np.array(self.episode_data['latent_states']),
             'timesteps': np.array(self.episode_data['timesteps']),
         }
-
-
-class EpisodeDataRecorderWrapper:
-    """
-    Wrapper around TD-MPC2 agent that captures episode data during act().
-    
-    Explicitly calls model.encode() and captures the latent state for recording.
-    Compatible with ActivationPatcher: if patches are active, this will capture
-    the MODIFIED latent state after patches have been applied.
-    """
-
-    def __init__(self, agent, recorder):
-        """
-		Initialize wrapper.
-		
-		Args:
-			agent: TDMPC2 agent
-			recorder: ActivationRecorder instance
-		"""
-        self.agent = agent
-        self.recorder = recorder
-        self._last_latent = None
-
-    #NOTE(Rodrigo): This is the original act() method.
-
-    # @torch.no_grad()
-    # def act(self, obs, t0=False, eval_mode=False, task=None):
-    # 	"""
-    # 	Select an action by planning in the latent space of the world model.
-
-    # 	Args:
-    # 		obs (torch.Tensor): Observation from the environment.
-    # 		t0 (bool): Whether this is the first observation in the episode.
-    # 		eval_mode (bool): Whether to use the mean of the action distribution.
-    # 		task (int): Task index (only used for multi-task experiments).
-
-    # 	Returns:
-    # 		torch.Tensor: Action to take in the environment.
-    # 	"""
-    # 	obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
-    # 	if task is not None:
-    # 		task = torch.tensor([task], device=self.device)
-    # 	if self.cfg.mpc:
-    # 		return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task).cpu()
-    # 	z = self.model.encode(obs, task)
-    # 	action, info = self.model.pi(z, task)
-    # 	if eval_mode:
-    # 		action = info["mean"]
-    # 	return action[0].cpu()
-
-    def act(self, obs, t0=False, eval_mode=False, task=None):
-        """
-		Act and record latent state.
-		
-		Args:
-			obs: Observation
-			t0: Whether first timestep
-			eval_mode: Whether in eval mode
-			task: Task ID (for multi-task)
-			
-		Returns:
-			action: Action to take
-		"""
-        # Prepare observation
-        obs_tensor = obs.to(self.agent.device, non_blocking=True).unsqueeze(0)
-        if task is not None:
-            task_tensor = torch.tensor([task], device=self.agent.device)
-        else:
-            task_tensor = None
-
-        # Encode to get latent state
-        latent_state = self.agent.model.encode(obs_tensor, task_tensor)
-
-        # Store latent state for recording
-        self._last_latent = latent_state.detach()
-
-        # Get action (either via planning or policy)
-        if self.agent.cfg.mpc:
-            action = self.agent.plan(obs_tensor,
-                                     t0=t0,
-                                     eval_mode=eval_mode,
-                                     task=task_tensor)
-        else:
-            action, _ = self.agent.model.pi(latent_state, task_tensor)
-            if eval_mode:
-                _, info = self.agent.model.pi(latent_state, task_tensor)
-                action = info["mean"]
-
-        return action.cpu()
-
-    def get_last_latent(self):
-        """Return the latent state from the last act() call."""
-        return self._last_latent
-
-    def __getattr__(self, name):
-        """Delegate all other attributes to the wrapped agent."""
-        return getattr(self.agent, name)
-
-
-def load_episode(filepath):
-    """
-	Load a saved episode from disk.
-	
-	Args:
-		filepath: Path to episode pickle file
-		
-	Returns:
-		dict with 'metadata' and 'data' keys
-	"""
-    with open(filepath, 'rb') as f:
-        episode_data = pickle.load(f)
-    return episode_data
-
-
-def load_all_episodes(save_dir):
-    """
-	Load all episodes from a directory.
-	
-	Args:
-		save_dir: Directory containing episode files
-		
-	Returns:
-		list of episode dicts
-	"""
-    save_dir = Path(save_dir)
-    episode_files = sorted(save_dir.glob("episode_*.pkl"))
-
-    episodes = []
-    for filepath in episode_files:
-        episodes.append(load_episode(filepath))
-
-    print(f"Loaded {len(episodes)} episodes from {save_dir}")
-    return episodes
