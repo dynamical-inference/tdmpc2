@@ -64,8 +64,8 @@ dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: ???
-wandb_entity: ???
+wandb_project: cartpole-swingup
+wandb_entity: gonlairo
 wandb_silent: false
 enable_wandb: true
 save_csv: true
@@ -89,3 +89,4 @@ action_dims: ???
 episode_lengths: ???
 seed_steps: ???
 bin_size: ???
+save_freq: 50000
