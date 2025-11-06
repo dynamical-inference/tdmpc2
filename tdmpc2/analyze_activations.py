@@ -24,6 +24,7 @@ import hydra
 from pathlib import Path
 from termcolor import colored
 from tqdm import tqdm
+import imageio
 
 from common.parser import parse_cfg
 from common.seed import set_seed
@@ -97,6 +98,7 @@ def analyze_activations(cfg: dict):
     all_episode_successes = []
 
     for ep_idx in tqdm(range(num_episodes), desc="Recording episodes"):
+
         # Create episode-specific save directories
         episode_dir = Path(base_save_dir) / f'episode_{ep_idx}_seed_{cfg.seed}'
         activations_dir = episode_dir / 'activations'
@@ -124,6 +126,9 @@ def analyze_activations(cfg: dict):
         ep_reward = 0
         t = 0
 
+        if cfg.save_video:
+            frames = [env.render()]
+
         # Run episode
         while not done:
             # Act (agent records planning data internally if enabled)
@@ -147,6 +152,9 @@ def analyze_activations(cfg: dict):
             ep_reward += reward
             t += 1
 
+            if cfg.save_video:
+                frames.append(env.render())
+
         # Save episode data
         metadata = {
             'episode_idx': ep_idx,
@@ -167,6 +175,12 @@ def analyze_activations(cfg: dict):
         all_episode_rewards.append(ep_reward)
         all_episode_lengths.append(t)
         all_episode_successes.append(info.get('success', False))
+
+        if cfg.save_video:
+            imageio.mimsave(os.path.join(episode_dir,
+                                         f'{cfg.task}-{ep_idx}.mp4'),
+                            frames,
+                            fps=30)
 
     # Print summary statistics
     print(colored('-' * 80, 'yellow'))
