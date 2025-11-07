@@ -40,6 +40,8 @@ MANIFEST
 *.pt
 *.pkl
 *.history/
+*.json
+*.mp4
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
