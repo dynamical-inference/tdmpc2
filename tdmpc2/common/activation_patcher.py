@@ -129,8 +129,6 @@ class ActivationPatcher:
         """
 
         def hook(module, input, output):
-
-            print(f"Hook called for {name} with output shape: {output.shape}")
             if not self.enabled:
                 return output
 
@@ -186,74 +184,65 @@ class ActivationPatcher:
         self.add_intervention(location, ablation_fn)
         print(f"  Ablating dimensions: {dims}")
 
-    # def add_noise(self,
-    #               location: str,
-    #               scale: float = 0.1,
-    #               dims: Optional[List[int]] = None):
-    #     """
-    #     Add Gaussian noise to activations.
+    def add_replacement(self, location: str, replacement_value: torch.Tensor,
+                        dims: List[int]):
+        """
+        Replace activations with a specific value.
 
-    #     Args:
-    #         location: Where to add noise
-    #         scale: Standard deviation of noise
-    #         dims: Optional list of dimensions to add noise to (None = all dims)
-    #     """
+        Args:
+            location: Where to replace
+            replacement_value: Tensor to replace with (must be broadcastable to activation sub-tensor, shape typically [..., len(dims)])
+            dims: List of dimensions to replace
 
-    #     def noise_fn(activation):
-    #         modified = activation.clone()
-    #         noise = torch.randn_like(activation) * scale
+        Example:
+            # Replace with mean activation from baseline
+            mean_activation = baseline_activations['encoder_output'].mean(0)
+            # mean_activation shape: [features]
+            recorder.add_replacement('encoder_output', mean_activation, dims=[0,1,2])
+        """
 
-    #         if dims is not None:
-    #             # Only add noise to specific dimensions
-    #             mask = torch.zeros_like(activation)
-    #             if activation.dim() == 2:
-    #                 mask[:, dims] = 1
-    #             elif activation.dim() == 3:
-    #                 mask[:, :, dims] = 1
-    #             noise = noise * mask
+        # replacement_value should be a 1D tensor of features, e.g. shape [features], or a tensor that can be indexed over dims.
+        def replacement_fn(activation):
+            modified = activation.clone()
+            # Replace only specific dimensions
+            if activation.dim() == 2:
+                # activation: [batch, features], replacement_value: [features] (or broadcastable)
+                modified[:, dims] = replacement_value[dims]
+            elif activation.dim() == 3:
+                modified[:, :, dims] = replacement_value[dims]
+            return modified
 
-    #         return modified + noise
+        self.add_intervention(location, replacement_fn)
+        print(
+            f"  Replacing with fixed value (dims: {dims}), replacement_value shape: {tuple(replacement_value.shape)}"
+        )
 
-    #     self.add_intervention(location, noise_fn)
-    #     dims_str = f" (dims: {dims})" if dims else ""
-    #     print(f"  Adding noise (scale={scale}){dims_str}")
+    def add_noise(self, location: str, dims: List[int], scale: float = 0.1):
+        """
+        Add Gaussian noise to activations.
 
-    # def add_replacement(self,
-    #                     location: str,
-    #                     replacement_value: torch.Tensor,
-    #                     dims: Optional[List[int]] = None):
-    #     """
-    #     Replace activations with a specific value.
+        Args:
+            location: Where to add noise
+            scale: Standard deviation of noise
+            dims: List of dimensions to add noise to
+        """
 
-    #     Args:
-    #         location: Where to replace
-    #         replacement_value: Tensor to replace with (must be broadcastable)
-    #         dims: Optional list of dimensions to replace (None = all dims)
+        def noise_fn(activation):
+            modified = activation.clone()
+            noise = torch.randn_like(activation) * scale
 
-    #     Example:
-    #         # Replace with mean activation from baseline
-    #         mean_activation = baseline_activations['encoder_output'].mean(0)
-    #         recorder.add_replacement('encoder_output', mean_activation)
-    #     """
+            # Only add noise to specific dimensions
+            mask = torch.zeros_like(activation)
+            if activation.dim() == 2:
+                mask[:, dims] = 1
+            elif activation.dim() == 3:
+                mask[:, :, dims] = 1
+            noise = noise * mask
 
-    #     def replacement_fn(activation):
-    #         modified = activation.clone()
+            return modified + noise
 
-    #         if dims is not None:
-    #             # Replace only specific dimensions
-    #             if activation.dim() == 2:
-    #                 modified[:, dims] = replacement_value[dims]
-    #             elif activation.dim() == 3:
-    #                 modified[:, :, dims] = replacement_value[dims]
-    #         else:
-    #             # Replace entire activation
-    #             modified = replacement_value.expand_as(activation)
-
-    #         return modified
-
-    #     self.add_intervention(location, replacement_fn)
-    #     dims_str = f" (dims: {dims})" if dims else ""
-    #     print(f"  Replacing with fixed value{dims_str}")
+        self.add_intervention(location, noise_fn)
+        print(f"  Adding noise (scale={scale}) (dims: {dims})")
 
     # def add_scaling(self,
     #                 location: str,
