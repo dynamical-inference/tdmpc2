@@ -42,6 +42,7 @@ MANIFEST
 *.history/
 *.json
 *.mp4
+*.npz
 logs
 
 # PyInstaller
