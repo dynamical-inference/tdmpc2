@@ -41,9 +41,13 @@ HINGE_1_VALUES = np.concatenate([negative_range, positive_range]).round(2)
 
 selected_directions_pca = np.load(
     'sweeps/selected_dirs_pca.npz')['comps_pca_all']
+# NOTE: only take the first 5 components for now
+selected_directions_pca = selected_directions_pca[:5]
 
-with open('/home/hgf_hmgu/hgf_gib4562/tdmpc2/sweeps/selected_latents_lasso.pkl',
-          'rb') as f:
+with open('sweeps/selected_dirs_pca_sparse_all.pkl', 'rb') as f:
+    selected_dirs_pca_sparse = pickle.load(f)
+
+with open('sweeps/selected_latents_lasso.pkl', 'rb') as f:
     selected_latents_lasso = pickle.load(f)
 
 # SEEDS FOR THE SWEEP
@@ -65,6 +69,53 @@ for seed in SEEDS:
                 'pca_component_idx': str(idx),
             })
 
+PCA_ABLATION_SCALE_CONFIGS = []
+# - scale=0: equivalent to ablation
+# - scale=1: no change
+# - scale>1: amplify component
+# - scale<0: reverse component
+scale_direcional_scalings = [
+    -0.9, -0.6, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.6, 0.9, 1.0, 1.2, 1.5, 1.8
+]
+directions_pca_scaling = selected_directions_pca[:1]
+for seed in SEEDS:
+    for hinge_1 in HINGE_1_VALUES:
+        for idx, direction in enumerate(directions_pca_scaling):
+            for scale in scale_direcional_scalings:
+                PCA_ABLATION_SCALE_CONFIGS.append({
+                    'type': 'directional_scaling_ablation',
+                    'location': 'encoder_output',
+                    'direction': direction,
+                    'scale': scale,
+                    'hinge_1_value': hinge_1,
+                    'seed': seed,
+                    'pca_component_idx': str(idx),
+                })
+
+PCA_DIRECTIONAL_ABALATION_SPARSE_CONFIGS = []
+selected_dirs_pca_sparse_comp0 = selected_dirs_pca_sparse[0]
+idx = 0
+eps_fracs_to_sweep = [0.35, 0.4]
+for seed in SEEDS:
+    for hinge_1 in HINGE_1_VALUES:
+        for eps_frac, value in selected_dirs_pca_sparse_comp0.items():
+            if eps_frac not in eps_fracs_to_sweep:
+                continue
+            direction_sparse = value['comp_sparse']
+            cosine_similarity = value['cosine']
+            n_nonzero = value['n_nonzero']
+            PCA_DIRECTIONAL_ABALATION_SPARSE_CONFIGS.append({
+                'type': 'directional_ablation_sparse',
+                'location': 'encoder_output',
+                'direction': direction_sparse,
+                'cosine_similarity': cosine_similarity,
+                'n_nonzero': n_nonzero,
+                'eps_frac': eps_frac,
+                'hinge_1_value': hinge_1,
+                'seed': seed,
+                'pca_component_idx': str(idx),
+            })
+
 RANDOM_DIRECTIONS_CONFIGS = []
 for seed in SEEDS:
     for hinge_1 in HINGE_1_VALUES:
@@ -79,10 +130,8 @@ LASSO_ABLATION_CONFIGS = []
 for seed in SEEDS:
     for hinge_1 in HINGE_1_VALUES:
         for variable, dict_ in selected_latents_lasso.items():
-            for selection_type in ['1se', 'min']:
-                for selection_threshold in [
-                        0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
-                ]:
+            for selection_type in ['1se']:
+                for selection_threshold in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
                     selected_dims = dict_[selection_type][selection_threshold]
                     LASSO_ABLATION_CONFIGS.append({
                         'type': 'lasso_ablation',
@@ -95,7 +144,25 @@ for seed in SEEDS:
                         'seed': seed,
                     })
 
-INTERVENTION_CONFIGS = PCA_ABLATION_CONFIGS + RANDOM_DIRECTIONS_CONFIGS + LASSO_ABLATION_CONFIGS
+PCA_CUMULATIVE_SUFFICIENCY_CONFIGS = []
+# Test sufficiency: keep only first k PCA components
+k_values_to_test = [1, 2, 3, 4, 5]  # Number of components to keep
+for seed in SEEDS:
+    for hinge_1 in HINGE_1_VALUES:
+        for k in k_values_to_test:
+            PCA_CUMULATIVE_SUFFICIENCY_CONFIGS.append({
+                'type': 'cumulative_pca_sufficiency',
+                'location': 'encoder_output',
+                'components':
+                    selected_directions_pca[:k],  # Keep first k components
+                'k': k,
+                'hinge_1_value': hinge_1,
+                'seed': seed,
+            })
+
+INTERVENTION_CONFIGS = PCA_CUMULATIVE_SUFFICIENCY_CONFIGS
+#PCA_DIRECTIONAL_ABALATION_SPARSE_CONFIGS
+#PCA_ABLATION_SCALE_CONFIGS  #PCA_ABLATION_CONFIGS + RANDOM_DIRECTIONS_CONFIGS + LASSO_ABLATION_CONFIGS
 
 # Base directory for saving results
 BASE_SAVE_DIR = 'logs/latent_interventions_guided_sweep'
@@ -120,7 +187,9 @@ def setup_intervention(patcher, config, latent_dim):
     intervention_type = config['type']
     location = config['location']
 
-    if intervention_type == 'directional_ablation':
+    if intervention_type in ('directional_ablation',
+                             'directional_scaling_ablation',
+                             'directional_ablation_sparse'):
         direction = config['direction']
         # Convert direction to torch tensor if it's a numpy array
         if isinstance(direction, np.ndarray):
@@ -133,7 +202,9 @@ def setup_intervention(patcher, config, latent_dim):
     # Clear any previous interventions
     patcher.clear_interventions()
 
-    if intervention_type == 'directional_ablation':
+    if intervention_type in [
+            'directional_ablation', 'directional_ablation_sparse'
+    ]:
         patcher.add_directional_ablation(location, direction=direction)
 
     elif intervention_type == 'random_direction':
@@ -142,6 +213,50 @@ def setup_intervention(patcher, config, latent_dim):
         random_direction = random_direction / torch.norm(random_direction)
         config['direction'] = random_direction
         patcher.add_directional_ablation(location, direction=random_direction)
+
+    elif intervention_type == 'directional_scaling_ablation':
+        scale = config['scale']
+        patcher.add_directional_scaling(location,
+                                        scale=scale,
+                                        direction=direction)
+
+    elif intervention_type == 'cumulative_pca_sufficiency':
+        # Keep only first k PCA components (sufficiency test)
+        components = config['components']
+        k = config['k']
+
+        # Convert components to torch tensor if needed
+        if isinstance(components, np.ndarray):
+            components = torch.from_numpy(components).float().to(DEVICE)
+        else:
+            components = components.to(DEVICE)
+
+        # Get SimNorm config from the agent's encoder
+        simnorm_dim = 8  # NOTE(R): same as config.yaml
+
+        # Define intervention function: project onto first k components
+        def cumulative_sufficiency_intervention(latents, **kwargs):
+            """Keep only first k PCA components, zero out all others"""
+            # latents shape: (batch, latent_dim)
+            # components shape: (k, latent_dim)
+
+            # Project onto first k components and reconstruct
+            coeffs = latents @ components.T  # (batch, k)
+            latents_reconstructed = coeffs @ components  # (batch, latent_dim)
+
+            # Re-apply SimNorm to maintain the model's expected distribution
+            # SimNorm groups dimensions and applies softmax within each group
+            shp = latents_reconstructed.shape
+            latents_reconstructed = latents_reconstructed.view(
+                *shp[:-1], -1, simnorm_dim)
+            latents_reconstructed = torch.nn.functional.softmax(
+                latents_reconstructed, dim=-1)
+            latents_reconstructed = latents_reconstructed.view(*shp)
+
+            return latents_reconstructed
+
+        patcher.add_intervention(location, cumulative_sufficiency_intervention)
+        config['components'] = components.tolist()  # Store for metadata
 
     elif intervention_type == 'lasso_ablation':
         selected_dims = config['selected_dims']
@@ -233,6 +348,7 @@ def main():
         # change config direction to list so we can serialize it
         if 'direction' in config:
             config['direction'] = config['direction'].tolist()
+
         metadata = {
             'config': config,
             'checkpoint': str(cfg.checkpoint),
