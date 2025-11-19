@@ -85,13 +85,13 @@ class DMControlWrapper:
             modified = False
 
             if 'qpos' in self._initial_state:
-                print('Changing position...')
                 modified = True
                 self._set_joint_positions(physics, self._initial_state['qpos'])
+                print('Intial position modified!')
             if 'qvel' in self._initial_state:
-                print("Changing velocities...")
                 modified = True
                 self._set_joint_velocities(physics, self._initial_state['qvel'])
+                print("Initial velocities modified!")
 
             # Update physics and observation if we modified anything
             if modified:
