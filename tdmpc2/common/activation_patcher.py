@@ -33,11 +33,25 @@ Example usage - Directional ablation:
     
     # Or scale it down instead of removing completely
     patcher.add_directional_scaling('encoder_output', scale=0.5, direction_name='velocity')
+
+Example usage - Directional addition (for steering/control):
+    # Extract an amplitude direction from episodes (e.g., pole angle oscillation)
+    amplitude_direction = extract_amplitude_direction(episodes)  # Your extraction method
     
-    # Or set it to a specific value
-    patcher.add_directional_replacement('encoder_output', 
-                                         replacement_magnitude=1.0,
-                                         direction_name='velocity')
+    # Store the direction
+    patcher.store_direction('amplitude', amplitude_direction)
+    
+    # Add the direction to INCREASE oscillation amplitude
+    patcher.add_directional_addition('encoder_output', magnitude=2.0, direction_name='amplitude')
+    
+    # Or DECREASE oscillation amplitude
+    patcher.add_directional_addition('encoder_output', magnitude=-1.0, direction_name='amplitude')
+    
+    # Can also control multiple features simultaneously
+    patcher.add_directional_addition('encoder_output',
+                                      magnitude=0.0,  # unused
+                                      direction_names=['amplitude', 'frequency'],
+                                      magnitudes=[2.0, -0.5])
 
 Advanced directional ablation examples:
     # Multi-directional ablation (remove multiple components simultaneously)
@@ -77,6 +91,7 @@ class ActivationPatcher:
     - Dimension ablation: Zero out specific coordinate dimensions
     - Directional ablation: Remove components along meaningful direction vectors
     - Directional scaling: Amplify or attenuate directional components
+    - Directional addition: Add/inject components to steer behavior (key for control)
     - Directional replacement: Set directional components to fixed values
     - Directional clamping: Constrain directional magnitudes to bounds
     - Noise injection: Add Gaussian noise to dimensions
@@ -529,6 +544,106 @@ class ActivationPatcher:
         else:
             print(
                 f"  Scaling {len(dir_list)} directional components by {scale}")
+
+    def add_directional_addition(
+            self,
+            location: str,
+            magnitude: float,
+            direction: Optional[torch.Tensor] = None,
+            direction_name: Optional[str] = None,
+            directions: Optional[List[torch.Tensor]] = None,
+            direction_names: Optional[List[str]] = None,
+            magnitudes: Optional[List[float]] = None,
+            normalize: bool = True):
+        """
+        Add (inject) a component along direction(s) to steer behavior.
+        
+        This is a key mechanistic interpretability technique for controlling
+        model behavior. Unlike directional_scaling (which modifies existing
+        components), this ADDS a new component regardless of what's already there.
+        
+        Computes: x_new = x + magnitude * d
+        
+        Args:
+            location: Where to add the component ('encoder_output', etc.)
+            magnitude: How much to add along the direction
+                      - magnitude=0: no change
+                      - magnitude>0: add in positive direction
+                      - magnitude<0: add in negative direction
+            direction: Single direction vector of shape [features]
+            direction_name: Name of stored direction to use
+            directions: List of direction vectors (for multi-directional addition)
+            direction_names: List of stored direction names
+            magnitudes: List of magnitudes (one per direction). If None, uses
+                       the single 'magnitude' value for all directions.
+            normalize: Whether to normalize direction(s) to unit length
+            
+        Example - Controlling pole oscillation:
+            >>> # Extract amplitude direction from episodes
+            >>> amp_direction = extract_amplitude_direction(episodes)
+            >>> patcher.store_direction('amplitude', amp_direction)
+            >>> 
+            >>> # Add positive amplitude to increase oscillation
+            >>> patcher.add_directional_addition('encoder_output',
+            ...                                   magnitude=2.0,
+            ...                                   direction_name='amplitude')
+            >>> 
+            >>> # Or reduce oscillation
+            >>> patcher.add_directional_addition('encoder_output',
+            ...                                   magnitude=-1.0,
+            ...                                   direction_name='amplitude')
+            
+        Example - Multi-directional steering:
+            >>> # Simultaneously control amplitude and frequency
+            >>> patcher.add_directional_addition('encoder_output',
+            ...                                   magnitude=0.0,  # unused when magnitudes is provided
+            ...                                   direction_names=['amplitude', 'frequency'],
+            ...                                   magnitudes=[2.0, -0.5])
+            
+        Note: 
+            This is different from directional_scaling:
+            - directional_scaling: modifies the EXISTING component (x·d)
+            - directional_addition: ADDS a NEW component independent of what exists
+            
+            For steering/control, directional_addition is usually more effective
+            because it directly sets the feature level you want, rather than
+            scaling whatever happens to be there naturally.
+        """
+        dir_list = self._parse_direction_args(direction, direction_name,
+                                              directions, direction_names,
+                                              normalize)
+
+        # Handle magnitudes
+        if magnitudes is None:
+            mag_list = [magnitude] * len(dir_list)
+        else:
+            if len(magnitudes) != len(dir_list):
+                raise ValueError(
+                    f"Number of magnitudes ({len(magnitudes)}) must match "
+                    f"number of directions ({len(dir_list)})")
+            mag_list = magnitudes
+
+        def addition_fn(activation):
+            modified = activation.clone()
+
+            # Add each direction component
+            for d, mag in zip(dir_list, mag_list):
+                d = d.to(activation.device)
+                # Simply add magnitude * direction
+                modified = modified + mag * d
+
+            return modified
+
+        self.add_intervention(location, addition_fn)
+        if len(dir_list) == 1:
+            print(
+                f"  Adding directional component with magnitude {magnitude:.3f}"
+            )
+        else:
+            mag_str = ", ".join([f"{m:.3f}" for m in mag_list])
+            print(
+                f"  Adding {len(dir_list)} directional components with magnitudes [{mag_str}]"
+            )
 
     # def add_directional_replacement(
     #         self,
