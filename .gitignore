@@ -43,6 +43,7 @@ MANIFEST
 *.json
 *.mp4
 *.npz
+*.npy
 logs
 
 # PyInstaller
