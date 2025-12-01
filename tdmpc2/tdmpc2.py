@@ -167,12 +167,55 @@ class TDMPC2(torch.nn.Module):
             z, action, task, return_type='avg')
 
     @torch.no_grad()
+    def plan_from_latent(self, z, t0=False, eval_mode=False, task=None):
+        """
+		Plan a sequence of actions from a given latent state using MPPI.
+		
+		NOTE(R): This method is useful for causal gradient estimation and other interventions
+		where you want to plan from an arbitrary latent state.
+
+		Args:
+			z (torch.Tensor): Latent state from which to plan (batch_size=1 or unbatched).
+			t0 (bool): Whether this is the first observation in the episode.
+			eval_mode (bool): Whether to use the mean of the action distribution.
+			task (Torch.Tensor): Task index (only used for multi-task experiments).
+
+		Returns:
+			torch.Tensor: Action to take in the environment.
+		"""
+        # Ensure z is batched
+        if z.ndim == 1:
+            z = z.unsqueeze(0)
+
+        return self._plan_from_latent(z, t0=t0, eval_mode=eval_mode, task=task)
+
+    @torch.no_grad()
     def _plan(self, obs, t0=False, eval_mode=False, task=None):
         """
 		Plan a sequence of actions using the learned world model.
 
 		Args:
-			z (torch.Tensor): Latent state from which to plan.
+			obs (torch.Tensor): Observation from which to plan.
+			t0 (bool): Whether this is the first observation in the episode.
+			eval_mode (bool): Whether to use the mean of the action distribution.
+			task (Torch.Tensor): Task index (only used for multi-task experiments).
+
+		Returns:
+			torch.Tensor: Action to take in the environment.
+		"""
+        # Encode observation to latent
+        z = self.model.encode(obs, task)
+        return self._plan_from_latent(z, t0=t0, eval_mode=eval_mode, task=task)
+
+    @torch.no_grad()
+    def _plan_from_latent(self, z, t0=False, eval_mode=False, task=None):
+        """
+		Core MPPI planning implementation that works from latent states.
+		
+		NOTE(R): This method is the core MPPI planning implementation that works from latent states.
+
+		Args:
+			z (torch.Tensor): Latent state (batched, batch_size=1).
 			t0 (bool): Whether this is the first observation in the episode.
 			eval_mode (bool): Whether to use the mean of the action distribution.
 			task (Torch.Tensor): Task index (only used for multi-task experiments).
@@ -181,7 +224,6 @@ class TDMPC2(torch.nn.Module):
 			torch.Tensor: Action to take in the environment.
 		"""
         # Sample policy trajectories
-        z = self.model.encode(obs, task)
         if self.cfg.num_pi_trajs > 0:
             pi_actions = torch.empty(self.cfg.horizon,
                                      self.cfg.num_pi_trajs,
