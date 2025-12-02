@@ -32,11 +32,14 @@ class RecordingTDMPC2(TDMPC2):
         
         # Setup recorders
         episode_rec = EpisodeDataRecorder(cfg)
-        planning_rec = PlanningDataRecorder()
+        planning_rec = PlanningDataRecorder(
+            save_dir='recordings',
+            record_rollouts=True,
+            record_only_last_iteration=False  # Set True to save only last iteration
+        )
         
-        # Create recording agent with rollout recording enabled
-        agent = RecordingTDMPC2(cfg, 
-                               planning_recorder=planning_rec,
+        # Create recording agent
+        agent = RecordingTDMPC2(cfg, planning_recorder=planning_rec)
         
         # Run episodes - all data is recorded automatically
         obs = env.reset()
@@ -144,12 +147,10 @@ class RecordingTDMPC2(TDMPC2):
                                   self.cfg.num_samples,
                                   z.shape[-1],
                                   device=z.device)
-            rewards = torch.zeros(
-                self.cfg.horizon,
-                self.cfg.num_samples,
-                max(self.cfg.num_bins,
-                    1),  # copied from world model reward layer
-                device=z.device)
+            rewards = torch.zeros(self.cfg.horizon,
+                                  self.cfg.num_samples,
+                                  1,
+                                  device=z.device)
             latents[0] = z
 
         # Roll out dynamics
@@ -164,7 +165,7 @@ class RecordingTDMPC2(TDMPC2):
                 task)  #z.shape = (num_samples=512, latent_dim=512)
 
             if return_rollouts:
-                rewards[t] = reward_raw
+                rewards[t] = reward
                 latents[t + 1] = z
 
             G = G + discount * (

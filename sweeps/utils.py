@@ -1,5 +1,7 @@
 from envs import make_env
 from recording_tdmpc2 import RecordingTDMPC2
+import imageio
+import os
 
 
 def run_episode_with_recording(env,
@@ -8,7 +10,10 @@ def run_episode_with_recording(env,
                                planning_recorder=None,
                                save_video=False,
                                eval_mode=True,
-                               task=None):
+                               task=None,
+                               episode_dir=None,
+                               task_name=None,
+                               patcher=None):
     """
     Run a single episode with optional recording.
     
@@ -23,20 +28,28 @@ def run_episode_with_recording(env,
         save_video: Whether to capture video frames
         eval_mode: Whether to run in evaluation mode
         task: Task index (for multi-task models)
+        patcher: Optional ActivationPatcher instance (for timestep tracking)
         
     Returns:
         episode_stats: Dict with reward, length, success, frames
     """
     # Update agent's recorders
-    agent.episode_recorder = episode_recorder
     agent.planning_recorder = planning_recorder
 
-    # Reset environment
-    obs = env.reset()
+    # Reset environment to the specified task
+    if task is not None:
+        # NOTE(R): This is necessary for multi-task environments
+        obs = env.reset(task_idx=task)
+    else:
+        obs = env.reset()
     done = False
     ep_reward = 0
     t = 0
     frames = []
+
+    # Reset patcher timestep if provided
+    if patcher is not None:
+        patcher.reset_timestep()
 
     if save_video:
         frames.append(env.render())
@@ -63,16 +76,18 @@ def run_episode_with_recording(env,
         ep_reward += reward
         t += 1
 
+        # Increment patcher timestep if provided
+        if patcher is not None:
+            patcher.step()
+
         if save_video:
             frames.append(env.render())
 
-    # episode_stats = {
-    #     'reward': float(ep_reward),
-    #     'length': int(t),
-    #     'frames': frames if save_video else None,
-    # }
-
-    #return episode_stats
+    if save_video:
+        task_name = task_name if task_name is not None else 'task_video'
+        imageio.mimsave(os.path.join(episode_dir, f'{task_name}.mp4'),
+                        frames,
+                        fps=30)
 
 
 def setup_agent(cfg):
@@ -90,7 +105,7 @@ def setup_agent(cfg):
     env = make_env(cfg)
 
     # Initialize recording agent
-    agent = RecordingTDMPC2(cfg, episode_recorder=None, planning_recorder=None)
+    agent = RecordingTDMPC2(cfg, planning_recorder=None)
 
     # Load checkpoint
     if cfg.checkpoint and cfg.checkpoint != '???':
