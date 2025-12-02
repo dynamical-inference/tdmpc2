@@ -235,11 +235,11 @@ class RolloutRunner:
         dynamics: Optional[Callable[..., Tuple[Tensor, Any]]] = None,
         env=None,
         encoder: Optional[Callable[..., Tensor]] = None,
-        renormalize_dynamics: bool = True,
         track_gradients: bool = False,
         default_planner_kwargs: Optional[Dict[str, Any]] = None,
         default_dynamics_kwargs: Optional[Dict[str, Any]] = None,
         default_objective_kwargs: Optional[Dict[str, Any]] = None,
+        verbose: bool = False,
     ):
         """
 		Args:
@@ -279,11 +279,11 @@ class RolloutRunner:
         self._objective = objective
         self._normalizer = normalizer
         self._horizon = horizon
-        self._renormalize_dynamics = renormalize_dynamics
         self._track_gradients = track_gradients
         self._planner_kwargs = default_planner_kwargs or {}
         self._dynamics_kwargs = default_dynamics_kwargs or {}
         self._objective_kwargs = default_objective_kwargs or {}
+        self._verbose = verbose
 
     def run(
         self,
@@ -334,10 +334,11 @@ class RolloutRunner:
         ) if self._track_gradients else torch.inference_mode()
         with context:
             # Normalize initial latent
-            z_curr = self._normalizer.normalize(z)
-            #z_curr = z.clone()
+            #z_curr = self._normalizer.normalize(z)
+            z_curr = z.clone()
 
-            observations_2 = self._env.reset(initial_state=initial_state)
+            observations_2 = self._env.reset(initial_state=initial_state,
+                                             verbose=self._verbose)
             assert torch.allclose(observations_2, initial_obs)
 
             latents: List[Tensor] = [z_curr]
@@ -371,7 +372,7 @@ class RolloutRunner:
                 if z_next.ndim > 1:
                     z_next = z_next.squeeze(0)
 
-                # no normalization
+                # no normalization, the encoder already simnorms the latents.
                 #z_next = self._normalizer.normalize(z_next)
 
                 latents.append(z_next)
@@ -396,6 +397,115 @@ class RolloutRunner:
                                            observations=observations_tensor,
                                            aux=aux_trace)
             return RolloutResult(trajectory=trajectory, score=score)
+
+
+class FiniteDifferenceProbe:
+    """
+	Random-direction finite difference probe for causal latent gradients.
+	
+	If a seed is provided, the probe will produce identical results across
+	multiple calls to estimate() with the same inputs (deterministic planning).
+	"""
+
+    def __init__(
+        self,
+        rollout_runner: RolloutRunner,
+        normalizer: LatentNormalizer,
+        num_directions: int,
+        perturbation_scale: float,
+        direction_sampler: Optional[RandomDirectionSampler] = None,
+        seed: Optional[int] = None,
+    ):
+        if perturbation_scale <= 0:
+            raise ValueError("perturbation_scale must be positive.")
+        self._runner = rollout_runner
+        self._normalizer = normalizer
+        self._num_directions = num_directions
+        self._epsilon = perturbation_scale
+        self._direction_sampler = direction_sampler
+        self._seed = seed
+
+    def estimate(self,
+                 z: TensorLike,
+                 initial_obs: TensorLike,
+                 initial_state: Dict[str, Any],
+                 directions: Optional[Tensor] = None,
+                 seed: Optional[int] = None) -> CausalGradientResult:
+        """
+		Estimate dJ/dz around the provided latent state using SPSA-style finite differences.
+		
+		Args:
+			z: Initial latent state
+			initial_obs: Initial observation
+			initial_state: Initial state dict for environment reset
+			directions: Optional pre-computed direction vectors. If None, will sample new directions.
+			seed: Optional seed for this specific estimate call. If provided, overrides the probe's default seed.
+		
+		Note:
+			The seed parameter only affects the planner (MPPI sampling, policy prior, action selection).
+			Direction sampling is independent and controlled by the direction_sampler's generator.
+			If no generator was provided to the direction_sampler, directions will be sampled randomly
+			each time, unaffected by the seed parameter.
+		"""
+
+        device = z.device
+        dtype = z.dtype
+
+        # Use provided seed, fall back to probe's default seed
+        active_seed = seed if seed is not None else self._seed
+
+        # NOW set seed for planner reproducibility (after direction sampling and restore)
+        # This only affects the rollouts, not the direction sampling
+        if active_seed is not None:
+            set_seed(active_seed)
+
+        if directions is None:
+            # Sample directions using current random state
+            directions = self._direction_sampler.sample(device=device,
+                                                        dtype=dtype)
+        else:
+            # Validate provided directions
+            if directions.shape != (self._num_directions, z.shape[-1]):
+                raise ValueError(
+                    f"Provided directions shape {directions.shape} doesn't match "
+                    f"expected shape ({self._num_directions}, {z.shape[-1]})")
+
+        baseline = self._runner.run(z,
+                                    initial_obs=initial_obs,
+                                    initial_state=initial_state)
+        gradient = torch.zeros_like(z)
+        positive_results: List[RolloutResult] = []
+        negative_results: List[RolloutResult] = []
+
+        # NOTE(R): Is there a way to batch this?
+        # I dont think so because dm environemnt dont' support vectorization.
+        for direction in directions:
+            perturbation = self._epsilon * direction
+            z_pos = self._normalizer.project_no_norm(z, perturbation)
+            z_neg = self._normalizer.project_no_norm(z, -perturbation)
+
+            result_pos = self._runner.run(z_pos,
+                                          initial_obs=initial_obs,
+                                          initial_state=initial_state)
+            result_neg = self._runner.run(z_neg,
+                                          initial_obs=initial_obs,
+                                          initial_state=initial_state)
+            positive_results.append(result_pos)
+            negative_results.append(result_neg)
+
+            score_delta = (result_pos.score -
+                           result_neg.score) / (2 * self._epsilon)
+            gradient = gradient + score_delta * direction
+
+        gradient = gradient / directions.shape[0]
+        return CausalGradientResult(
+            gradient=gradient,
+            baseline=baseline,
+            directions=directions,
+            perturbation_scale=self._epsilon,
+            positive_rollouts=positive_results,
+            negative_rollouts=negative_results,
+        )
 
 
 class LatentObjectiveRunner:
@@ -528,121 +638,3 @@ class BackpropGradientProbe:
         gradient = z.grad.clone() if z.grad is not None else torch.zeros_like(z)
 
         return gradient, result
-
-
-class FiniteDifferenceProbe:
-    """
-	Random-direction finite difference probe for causal latent gradients.
-	
-	If a seed is provided, the probe will produce identical results across
-	multiple calls to estimate() with the same inputs (deterministic planning).
-	"""
-
-    def __init__(
-        self,
-        rollout_runner: RolloutRunner,
-        normalizer: LatentNormalizer,
-        num_directions: int,
-        perturbation_scale: float,
-        direction_sampler: Optional[RandomDirectionSampler] = None,
-        seed: Optional[int] = None,
-    ):
-        if perturbation_scale <= 0:
-            raise ValueError("perturbation_scale must be positive.")
-        self._runner = rollout_runner
-        self._normalizer = normalizer
-        self._num_directions = num_directions
-        self._epsilon = perturbation_scale
-        self._direction_sampler = direction_sampler
-        self._seed = seed
-
-    def sample_directions(self, device: torch.device,
-                          dtype: torch.dtype) -> Tensor:
-        """
-		Sample random directions that can be reused across multiple estimate() calls.
-		
-		Args:
-			device: Device to create directions on
-			dtype: Data type for directions
-			
-		Returns:
-			Tensor of shape (num_directions, latent_dim) with normalized direction vectors
-		"""
-        return self._direction_sampler.sample(device=device, dtype=dtype)
-
-    def estimate(self,
-                 z: TensorLike,
-                 initial_obs: TensorLike,
-                 initial_state: Dict[str, Any],
-                 directions: Optional[Tensor] = None,
-                 seed: Optional[int] = None) -> CausalGradientResult:
-        """
-		Estimate dJ/dz around the provided latent state using SPSA-style finite differences.
-		
-		Args:
-			z: Initial latent state
-			initial_obs: Initial observation
-			initial_state: Initial state dict for environment reset
-			directions: Optional pre-computed direction vectors. If None, will sample new directions.
-			seed: Optional seed for this specific estimate call. If provided, overrides the probe's default seed.
-		
-		Note:
-			If a seed is provided (either via this parameter or during initialization), the global 
-			PyTorch random state will be set once at the beginning to ensure reproducible results. 
-			This controls randomness in the planner (MPPI sampling, policy prior, action selection).
-		"""
-        # Use provided seed, fall back to probe's default seed
-        active_seed = seed if seed is not None else self._seed
-
-        # Set seed once at the beginning for full determinism
-        if active_seed is not None:
-            set_seed(active_seed)
-
-        device = z.device
-        dtype = z.dtype
-
-        if directions is None:
-            directions = self._direction_sampler.sample(device=device,
-                                                        dtype=dtype)
-        else:
-            # Validate provided directions
-            if directions.shape != (self._num_directions, z.shape[-1]):
-                raise ValueError(
-                    f"Provided directions shape {directions.shape} doesn't match "
-                    f"expected shape ({self._num_directions}, {z.shape[-1]})")
-
-        baseline = self._runner.run(z,
-                                    initial_obs=initial_obs,
-                                    initial_state=initial_state)
-        gradient = torch.zeros_like(z)
-        positive_results: List[RolloutResult] = []
-        negative_results: List[RolloutResult] = []
-
-        # NOTE(R): Is there a way to batch this?
-        for direction in directions:
-            perturbation = self._epsilon * direction
-            z_pos = self._normalizer.project(z, perturbation)
-            z_neg = self._normalizer.project(z, -perturbation)
-
-            result_pos = self._runner.run(z_pos,
-                                          initial_obs=initial_obs,
-                                          initial_state=initial_state)
-            result_neg = self._runner.run(z_neg,
-                                          initial_obs=initial_obs,
-                                          initial_state=initial_state)
-            positive_results.append(result_pos)
-            negative_results.append(result_neg)
-
-            score_delta = (result_pos.score -
-                           result_neg.score) / (2 * self._epsilon)
-            gradient = gradient + score_delta * direction
-
-        gradient = gradient / directions.shape[0]
-        return CausalGradientResult(
-            gradient=gradient,
-            baseline=baseline,
-            directions=directions,
-            perturbation_scale=self._epsilon,
-            positive_rollouts=positive_results,
-            negative_rollouts=negative_results,
-        )
