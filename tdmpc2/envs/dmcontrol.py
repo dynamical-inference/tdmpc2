@@ -75,7 +75,7 @@ class DMControlWrapper:
             np.concatenate([v.flatten() for v in obs.values()],
                            dtype=np.float32))
 
-    def reset(self, initial_state=None):
+    def reset(self, initial_state=None, verbose=False):
         """Reset environment and optionally apply custom initial state."""
         obs = self.env.reset().observation
 
@@ -90,11 +90,13 @@ class DMControlWrapper:
             if 'qpos' in initial_state:
                 modified = True
                 self._set_joint_positions(physics, initial_state['qpos'])
-                print('Intial position modified!')
+                if verbose:
+                    print('Intial position modified!')
             if 'qvel' in initial_state:
                 modified = True
                 self._set_joint_velocities(physics, initial_state['qvel'])
-                print("Initial velocities modified!")
+                if verbose:
+                    print("Initial velocities modified!")
 
             # Update physics and observation if we modified anything
             if modified:
