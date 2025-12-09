@@ -45,6 +45,7 @@ MANIFEST
 *.npz
 *.npy
 logs
+analysis/exploratory
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
