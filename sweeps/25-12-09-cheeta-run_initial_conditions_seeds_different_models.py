@@ -98,6 +98,7 @@ def main():
         cfg = parse_cfg(cfg)
 
         # Set seed for this episode
+        seed = config['seed']
         set_seed(seed)
 
         # Initialize environment and agent

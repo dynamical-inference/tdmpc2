@@ -127,6 +127,14 @@ def main():
         # Parse config
         cfg = parse_cfg(cfg)
 
+        seed = config['seed']
+        initial_state = config['initial_state']
+        cfg.initial_state = {
+            'qpos': {
+                'slider': initial_state[0],
+                'hinge_1': initial_state[1],
+            },
+        }
         # Set seed for this episode
         set_seed(seed)
 
