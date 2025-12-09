@@ -8,6 +8,10 @@ import numpy as np
 from dm_control import suite
 from tqdm import tqdm
 import imageio
+import pickle
+import json
+from pathlib import Path
+import pandas as pd
 
 
 def extract_variables(data,
@@ -280,3 +284,187 @@ def reconstruct_cartpole_dmcontrol(states,
         imageio.mimwrite(out_path, frames, fps=30, macro_block_size=None)
         print(f"Wrote {len(frames)} frames to {os.path.abspath(out_path)}")
     return frames
+
+
+def load_data(
+    df_metadata,
+    cart_position=None,
+    pole_angle=None,
+    normalization_method=None,
+    seed=None,
+):
+    """
+    Load intervention data from directories matching the specified criteria.
+    
+    Parameters can be single values or lists. If a parameter is None, it matches all values.
+    
+    Returns:
+        pd.DataFrame: DataFrame with config info and episode data
+    """
+
+    # Convert single values to lists for uniform handling
+    def to_list(val):
+        if val is None:
+            return None
+        return val if isinstance(val, list) else [val]
+
+    cart_position_list = to_list(cart_position)
+    pole_angle_list = to_list(pole_angle)
+    seed_list = to_list(seed)
+    normalization_list = to_list(normalization_method)
+
+    # Filter configs based on criteria
+    filtered_configs = []
+    for idx, config in df_metadata.iterrows():
+        inital_state = config.get('initial_state')
+        # Check each criterion
+        if cart_position_list is not None and inital_state[
+                0] not in cart_position_list:
+            continue
+        if pole_angle_list is not None and inital_state[
+                1] not in pole_angle_list:
+            continue
+        if normalization_list is not None and config.get(
+                'normalization_method') not in normalization_list:
+            continue
+        if seed_list is not None and config.get('config_seed') not in seed_list:
+            continue
+
+        filtered_configs.append(config)
+
+    print(f"Found {len(filtered_configs)} configurations")
+    # Load episode data for each matching config
+    results = []
+    for config in tqdm(filtered_configs):
+        directory = Path(config['directory'])
+        episode_path = directory / "activations" / "episode_0000.pkl"
+
+        if episode_path.exists():
+            # Load the pickled episode data
+            with open(episode_path, 'rb') as f:
+                episode_data = pickle.load(f)
+
+            # Unflatten the data structure
+            episode_data = episode_data['data']
+            for key, value in episode_data.items():
+
+                if key == 'latent_states':
+                    config[key] = value.squeeze()
+                else:
+                    config[key] = value
+
+            results.append(config)
+
+    return pd.DataFrame(results)
+
+
+def flatten_dict(d, parent_key='', sep='_'):
+    """
+    Flatten a nested dictionary.
+    
+    Args:
+        d: Dictionary to flatten
+        parent_key: String to prepend to keys
+        sep: Separator between nested keys
+    
+    Returns:
+        Flattened dictionary
+    """
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
+def load_sweep_metadata(sweep_base_dirs):
+    """
+    Load and flatten metadata from one or more sweep base directories.
+
+    Args:
+        sweep_base_dirs: Path or list of Path objects/strings
+
+    Returns:
+        pd.DataFrame with flattened metadata for all runs in all provided directories
+    """
+    from tqdm import tqdm
+
+    if isinstance(sweep_base_dirs, (str, Path)):
+        sweep_base_dirs = [sweep_base_dirs]
+    sweep_base_dirs = [Path(d) for d in sweep_base_dirs]
+
+    all_metadata = []
+    for sweep_base_dir in sweep_base_dirs:
+        sweep_dirs = [d for d in sweep_base_dir.iterdir() if d.is_dir()]
+        for sweep_dir in tqdm(sweep_dirs, desc=f"Dirs in {sweep_base_dir}"):
+            metadata_path = sweep_dir / "activations" / "episode_0000_metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, 'r') as f:
+                    try:
+                        metadata = json.load(f)
+                        # Flatten the nested metadata dictionary
+                        flattened_metadata = flatten_dict(metadata)
+                        # Add the directory path
+                        flattened_metadata['directory'] = str(sweep_dir)
+                        all_metadata.append(flattened_metadata)
+                    except json.JSONDecodeError:
+                        print(f"Error decoding JSON for {metadata_path}")
+                        continue
+
+    print(f"Found {len(all_metadata)} configurations")
+    # Create DataFrame from flattened metadata
+    df_metadata = pd.DataFrame(all_metadata)
+    return df_metadata
+
+
+def compute_success(df_data,
+                    threshold_angle=0.1,
+                    consecutive_steps=100,
+                    starting_step=0,
+                    column_name=None):
+    """
+    Compute whether the pole is upright (straight) for consecutive_steps time points.
+    
+    Args:
+        df_data: DataFrame with 'observations' column containing state arrays
+        threshold_angle: Maximum angle deviation from vertical (in radians) to consider "straight"
+        consecutive_steps: Number of consecutive steps required for success
+    
+    Returns:
+        df_data: DataFrame with added 'success' column
+    """
+    success = []
+
+    for idx in range(len(df_data)):
+        observations = np.array(df_data['observations'].iloc[idx])
+        observations = observations[starting_step:]
+
+        # Extract cos and sin of pole angle (dimensions 1 and 2)
+        cos_angle = observations[:, 1]
+        sin_angle = observations[:, 2]
+
+        # Compute actual angle from cos and sin
+        angles = np.arctan2(sin_angle, cos_angle)
+
+        # Check if angle is within threshold (close to 0, which is upright)
+        is_straight = np.abs(angles) < threshold_angle
+
+        # Check for consecutive_steps consecutive True values
+        episode_success = False
+        count = 0
+        for straight in is_straight:
+            if straight:
+                count += 1
+                if count >= consecutive_steps:
+                    episode_success = True
+                    break
+            else:
+                count = 0
+
+        success.append(episode_success)
+    column_name = column_name if column_name is not None else 'success'
+    df_data[column_name] = np.array(success)
+    return df_data

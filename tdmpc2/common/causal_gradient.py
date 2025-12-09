@@ -454,8 +454,7 @@ class FiniteDifferenceProbe:
         # Use provided seed, fall back to probe's default seed
         active_seed = seed if seed is not None else self._seed
 
-        # NOW set seed for planner reproducibility (after direction sampling and restore)
-        # This only affects the rollouts, not the direction sampling
+        # Set seed for planner reproducibility
         if active_seed is not None:
             set_seed(active_seed)
 
