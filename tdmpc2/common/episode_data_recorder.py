@@ -133,7 +133,7 @@ class EpisodeDataRecorder:
         })
 
         # Save to file
-        filename = f"episode_{self.episode_idx:04d}.pkl"
+        filename = f"episode_data.pkl"
         filepath = self.save_dir / filename
 
         save_data = {
@@ -145,7 +145,7 @@ class EpisodeDataRecorder:
             pickle.dump(save_data, f)
 
         # Also save metadata as JSON for easy inspection
-        metadata_file = self.save_dir / f"episode_{self.episode_idx:04d}_metadata.json"
+        metadata_file = self.save_dir / f"episode_metadata.json"
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
 
