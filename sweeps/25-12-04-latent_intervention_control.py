@@ -118,11 +118,11 @@ for seed in SEEDS:
             LASSO_CONFIGS.append({
                 'type': 'directional_addition',
                 'location': 'encoder_output',
-                'direction': direction,
-                'magnitude': lasso_alpha,
+                'magnitude': alpha,
                 'seed': seed,
                 'direction_str': f'w_action_lasso',
-                'lasso_alpha': lasso_alpha
+                'lasso_alpha': lasso_alpha,
+                'direction': direction,
             })
 ### BACKPROP GRADIENT SWEEP WITH PLANNING ROLLOUTS
 # BACKPROP_NONLINEAR_GRADIENT_ROLLOUTS_CONFIGS = []
