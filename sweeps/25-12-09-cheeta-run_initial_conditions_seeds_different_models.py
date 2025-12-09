@@ -55,7 +55,7 @@ for seed in SEEDS:
         'seed': seed,
     })
 
-CONFIGS = SINGLE_TASK_CONFIGS
+CONFIGS = SINGLE_TASK_CONFIGS + MULTITASK_CONFIGS
 
 # ============================================================================
 # MAIN SWEEP
