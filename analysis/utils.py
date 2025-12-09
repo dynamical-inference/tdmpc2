@@ -5,7 +5,7 @@ os.environ["MUJOCO_GL"] = "egl"  # Must be set BEFORE importing dm_control
 from rastermap import Rastermap
 import matplotlib.pyplot as plt
 import numpy as np
-from dm_control import suite
+
 from tqdm import tqdm
 import imageio
 import pickle
@@ -261,6 +261,7 @@ def reconstruct_cartpole_dmcontrol(states,
                                    camera_id=0,
                                    save_video=False,
                                    out_path=None):
+    from dm_control import suite
 
     if save_video:
         assert out_path is not None, "out_path must be provided if save_video is True"
