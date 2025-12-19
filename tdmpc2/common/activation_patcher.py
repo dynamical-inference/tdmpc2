@@ -75,6 +75,23 @@ Advanced directional ablation examples:
     
     # Check current state
     patcher.summary()  # Shows all interventions and stored directions
+
+Example usage - Step-gated interventions:
+    # Apply ablation only during specific steps of an episode
+    patcher.add_directional_ablation('encoder_output',
+                                       direction_name='velocity',
+                                       start_step=10,  # Start at step 10
+                                       end_step=50)    # Stop after step 50
+    
+    # Run episode with step-gated intervention
+    obs = env.reset()
+    patcher.reset_step()  # Reset step counter at episode start
+    for step in range(max_steps):
+        patcher.set_step(step)  # Update step counter
+        action = agent.act(obs)  # Intervention only applies during steps 10-50
+        obs, reward, done, info = env.step(action)
+        if done:
+            break
 """
 
 import torch
@@ -129,6 +146,7 @@ class ActivationPatcher:
         self.modules_to_hook = modules_to_hook
         self.directions = {
         }  # Stores named direction vectors for directional interventions
+        self.current_step = 0  # Current step counter for step-gated interventions
 
         # Setup hooks on all key components
         self._setup_hooks()
@@ -225,21 +243,36 @@ class ActivationPatcher:
         self.interventions[location] = intervention_fn
         print(f"Added intervention at: {location}")
 
-    def add_ablation(self, location: str, dims: Union[int, List[int]]):
+    def add_ablation(self,
+                     location: str,
+                     dims: Union[int, List[int]],
+                     start_step: Optional[int] = None,
+                     end_step: Optional[int] = None):
         """
         Ablate (zero out) specific dimensions at a location.
 
         Args:
             location: Where to ablate ('encoder_output', 'dynamics_output', etc.)
             dims: Dimension index or list of indices to zero out
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
 
         Example:
             recorder.add_ablation('encoder_output', dims=[0, 5, 42])
+            
+            # Only ablate during steps 10-50
+            recorder.add_ablation('encoder_output', dims=[0, 5], start_step=10, end_step=50)
         """
         if isinstance(dims, int):
             dims = [dims]
 
         def ablation_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             # Clone to avoid modifying original
             modified = activation.clone()
             # Zero out specified dimensions
@@ -250,10 +283,15 @@ class ActivationPatcher:
             return modified
 
         self.add_intervention(location, ablation_fn)
-        print(f"  Ablating dimensions: {dims}")
+        step_str = self._format_step_bounds(start_step, end_step)
+        print(f"  Ablating dimensions: {dims}{step_str}")
 
-    def add_replacement(self, location: str, replacement_value: torch.Tensor,
-                        dims: List[int]):
+    def add_replacement(self,
+                        location: str,
+                        replacement_value: torch.Tensor,
+                        dims: List[int],
+                        start_step: Optional[int] = None,
+                        end_step: Optional[int] = None):
         """
         Replace activations with a specific value.
 
@@ -261,6 +299,8 @@ class ActivationPatcher:
             location: Where to replace
             replacement_value: Tensor to replace with (must be broadcastable to activation sub-tensor, shape typically [..., len(dims)])
             dims: List of dimensions to replace
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
 
         Example:
             # Replace with mean activation from baseline
@@ -271,6 +311,12 @@ class ActivationPatcher:
 
         # replacement_value should be a 1D tensor of features, e.g. shape [features], or a tensor that can be indexed over dims.
         def replacement_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             modified = activation.clone()
             # Replace only specific dimensions
             if activation.dim() == 2:
@@ -281,11 +327,17 @@ class ActivationPatcher:
             return modified
 
         self.add_intervention(location, replacement_fn)
+        step_str = self._format_step_bounds(start_step, end_step)
         print(
-            f"  Replacing with fixed value (dims: {dims}), replacement_value shape: {tuple(replacement_value.shape)}"
+            f"  Replacing with fixed value (dims: {dims}), replacement_value shape: {tuple(replacement_value.shape)}{step_str}"
         )
 
-    def add_noise(self, location: str, dims: List[int], scale: float = 0.1):
+    def add_noise(self,
+                  location: str,
+                  dims: List[int],
+                  scale: float = 0.1,
+                  start_step: Optional[int] = None,
+                  end_step: Optional[int] = None):
         """
         Add Gaussian noise to activations.
 
@@ -293,9 +345,17 @@ class ActivationPatcher:
             location: Where to add noise
             scale: Standard deviation of noise
             dims: List of dimensions to add noise to
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
         """
 
         def noise_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             modified = activation.clone()
             noise = torch.randn_like(activation) * scale
 
@@ -310,7 +370,8 @@ class ActivationPatcher:
             return modified + noise
 
         self.add_intervention(location, noise_fn)
-        print(f"  Adding noise (scale={scale}) (dims: {dims})")
+        step_str = self._format_step_bounds(start_step, end_step)
+        print(f"  Adding noise (scale={scale}) (dims: {dims}){step_str}")
 
     # def add_scaling(self,
     #                 location: str,
@@ -435,7 +496,9 @@ class ActivationPatcher:
             direction_name: Optional[str] = None,
             directions: Optional[List[torch.Tensor]] = None,
             direction_names: Optional[List[str]] = None,
-            normalize: bool = True):
+            normalize: bool = True,
+            start_step: Optional[int] = None,
+            end_step: Optional[int] = None):
         """
         Ablate (remove) components along one or more direction vectors.
         
@@ -449,6 +512,8 @@ class ActivationPatcher:
             directions: List of direction vectors (for multi-directional ablation)
             direction_names: List of stored direction names (for multi-directional ablation)
             normalize: Whether to normalize direction(s) to unit length
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
             
         Example (single direction):
             >>> velocity_dir = torch.randn(512)
@@ -461,6 +526,12 @@ class ActivationPatcher:
         Example (multiple directions):
             >>> dirs = [velocity_dir, position_dir, orientation_dir]
             >>> patcher.add_directional_ablation('encoder_output', directions=dirs)
+            
+        Example (step-gated ablation):
+            >>> # Only ablate between steps 10 and 50
+            >>> patcher.add_directional_ablation('encoder_output', 
+            ...                                   direction_name='velocity',
+            ...                                   start_step=10, end_step=50)
         """
         # Parse direction arguments
         dir_list = self._parse_direction_args(direction, direction_name,
@@ -468,6 +539,12 @@ class ActivationPatcher:
                                               normalize)
 
         def ablation_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             modified = activation.clone()
 
             # Remove each direction component sequentially
@@ -479,10 +556,12 @@ class ActivationPatcher:
             return modified
 
         self.add_intervention(location, ablation_fn)
+        step_str = self._format_step_bounds(start_step, end_step)
         if len(dir_list) == 1:
-            print(f"  Ablating 1 directional component")
+            print(f"  Ablating 1 directional component{step_str}")
         else:
-            print(f"  Ablating {len(dir_list)} directional components")
+            print(
+                f"  Ablating {len(dir_list)} directional components{step_str}")
 
     def add_directional_scaling(self,
                                 location: str,
@@ -491,7 +570,9 @@ class ActivationPatcher:
                                 direction_name: Optional[str] = None,
                                 directions: Optional[List[torch.Tensor]] = None,
                                 direction_names: Optional[List[str]] = None,
-                                normalize: bool = True):
+                                normalize: bool = True,
+                                start_step: Optional[int] = None,
+                                end_step: Optional[int] = None):
         """
         Scale the component along direction(s) by a factor.
         
@@ -510,6 +591,8 @@ class ActivationPatcher:
             directions: List of direction vectors (for multi-directional scaling)
             direction_names: List of stored direction names
             normalize: Whether to normalize direction(s) to unit length
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
             
         Example:
             >>> # Amplify velocity component by 2x
@@ -521,12 +604,24 @@ class ActivationPatcher:
             >>> patcher.add_directional_scaling('encoder_output',
             ...                                   scale=-1.0,
             ...                                   direction_name='position')
+            
+            >>> # Scale only during steps 20-100
+            >>> patcher.add_directional_scaling('encoder_output',
+            ...                                   scale=0.5,
+            ...                                   direction_name='velocity',
+            ...                                   start_step=20, end_step=100)
         """
         dir_list = self._parse_direction_args(direction, direction_name,
                                               directions, direction_names,
                                               normalize)
 
         def scaling_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             modified = activation.clone()
 
             # Scale each direction component
@@ -539,11 +634,13 @@ class ActivationPatcher:
             return modified
 
         self.add_intervention(location, scaling_fn)
+        step_str = self._format_step_bounds(start_step, end_step)
         if len(dir_list) == 1:
-            print(f"  Scaling 1 directional component by {scale}")
+            print(f"  Scaling 1 directional component by {scale}{step_str}")
         else:
             print(
-                f"  Scaling {len(dir_list)} directional components by {scale}")
+                f"  Scaling {len(dir_list)} directional components by {scale}{step_str}"
+            )
 
     def add_directional_addition(
             self,
@@ -554,7 +651,9 @@ class ActivationPatcher:
             directions: Optional[List[torch.Tensor]] = None,
             direction_names: Optional[List[str]] = None,
             magnitudes: Optional[List[float]] = None,
-            normalize: bool = True):
+            normalize: bool = True,
+            start_step: Optional[int] = None,
+            end_step: Optional[int] = None):
         """
         Add (inject) a component along direction(s) to steer behavior.
         
@@ -577,6 +676,8 @@ class ActivationPatcher:
             magnitudes: List of magnitudes (one per direction). If None, uses
                        the single 'magnitude' value for all directions.
             normalize: Whether to normalize direction(s) to unit length
+            start_step: Step at which to start applying the intervention (inclusive, None = from beginning)
+            end_step: Step at which to stop applying the intervention (inclusive, None = until end)
             
         Example - Controlling pole oscillation:
             >>> # Extract amplitude direction from episodes
@@ -599,6 +700,13 @@ class ActivationPatcher:
             ...                                   magnitude=0.0,  # unused when magnitudes is provided
             ...                                   direction_names=['amplitude', 'frequency'],
             ...                                   magnitudes=[2.0, -0.5])
+            
+        Example - Step-gated addition:
+            >>> # Only add component during steps 50-150
+            >>> patcher.add_directional_addition('encoder_output',
+            ...                                   magnitude=1.5,
+            ...                                   direction_name='velocity',
+            ...                                   start_step=50, end_step=150)
             
         Note: 
             This is different from directional_scaling:
@@ -624,6 +732,12 @@ class ActivationPatcher:
             mag_list = magnitudes
 
         def addition_fn(activation):
+            # Check step bounds
+            if start_step is not None and self.current_step < start_step:
+                return activation
+            if end_step is not None and self.current_step > end_step:
+                return activation
+
             modified = activation.clone()
 
             # Add each direction component
@@ -635,14 +749,15 @@ class ActivationPatcher:
             return modified
 
         self.add_intervention(location, addition_fn)
+        step_str = self._format_step_bounds(start_step, end_step)
         if len(dir_list) == 1:
             print(
-                f"  Adding directional component with magnitude {magnitude:.3f}"
+                f"  Adding directional component with magnitude {magnitude:.3f}{step_str}"
             )
         else:
             mag_str = ", ".join([f"{m:.3f}" for m in mag_list])
             print(
-                f"  Adding {len(dir_list)} directional components with magnitudes [{mag_str}]"
+                f"  Adding {len(dir_list)} directional components with magnitudes [{mag_str}]{step_str}"
             )
 
     # def add_directional_replacement(
@@ -792,6 +907,18 @@ class ActivationPatcher:
     #             f"  Clamping {len(dir_list)} directional components to {clamp_str}"
     #         )
 
+    def _format_step_bounds(self, start_step: Optional[int],
+                            end_step: Optional[int]) -> str:
+        """Format step bounds for printing."""
+        if start_step is None and end_step is None:
+            return ""
+        elif start_step is not None and end_step is not None:
+            return f" (steps {start_step}-{end_step})"
+        elif start_step is not None:
+            return f" (from step {start_step})"
+        else:
+            return f" (until step {end_step})"
+
     def _parse_direction_args(self, direction: Optional[torch.Tensor],
                               direction_name: Optional[str],
                               directions: Optional[List[torch.Tensor]],
@@ -888,6 +1015,33 @@ class ActivationPatcher:
         self.enabled = False
         print("Interventions disabled")
 
+    def set_step(self, step: int):
+        """
+        Set the current step counter for step-gated interventions.
+        
+        Call this at each step of your rollout to update the step counter.
+        Interventions with start_step/end_step will only apply when
+        current_step is within [start_step, end_step].
+        
+        Args:
+            step: Current step number (0-indexed)
+            
+        Example:
+            >>> for step in range(max_steps):
+            ...     patcher.set_step(step)
+            ...     action = agent.act(obs)  # Interventions will check step bounds
+            ...     obs, reward, done, info = env.step(action)
+        """
+        self.current_step = step
+
+    def reset_step(self):
+        """Reset the step counter to 0. Call at the start of each episode."""
+        self.current_step = 0
+
+    def increment_step(self):
+        """Increment the step counter by 1. Alternative to set_step()."""
+        self.current_step += 1
+
     def get_activation(self, location: str) -> Optional[torch.Tensor]:
         """
         Get recorded activation at a specific location.
@@ -921,6 +1075,7 @@ class ActivationPatcher:
         print("ActivationPatcher Summary")
         print("=" * 60)
         print(f"Enabled: {self.enabled}")
+        print(f"Current step: {self.current_step}")
         print(f"Number of interventions: {len(self.interventions)}")
         print(f"Number of stored directions: {len(self.directions)}")
 
