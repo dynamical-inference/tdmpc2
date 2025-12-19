@@ -49,7 +49,7 @@ def run_episode_with_recording(env,
 
     # Reset patcher timestep if provided
     if patcher is not None:
-        patcher.reset_timestep()
+        patcher.reset_step()
 
     if save_video:
         frames.append(env.render())
@@ -78,7 +78,7 @@ def run_episode_with_recording(env,
 
         # Increment patcher timestep if provided
         if patcher is not None:
-            patcher.step()
+            patcher.increment_step()
 
         if save_video:
             frames.append(env.render())
