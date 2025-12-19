@@ -33,7 +33,7 @@ override_cfg = dict(
     mpc=True,
     multitask=False,
     model_size=5,
-    save_video=False,  # Disable video to speed up sweep
+    save_video=True,  # Disable video to speed up sweep
     record_planning=False,  # Focus on episode data
 )
 
@@ -47,17 +47,20 @@ path_to_data = '/home/hgf_hmgu/hgf_gib4562/tdmpc2/sweeps/sweep_data/25-12-15-con
 w_lr_coefs_noncentered_dict = pickle.load(
     open(os.path.join(path_to_data, 'w_lr_coefs_noncentered.pkl'), 'rb'))
 
+w_lr_coefs_noncentered_lagged_delta_dict = pickle.load(
+    open(os.path.join(path_to_data, 'w_lr_coefs_noncentered_lagged_delta.pkl'),
+         'rb'))
+
 # ============================================================================
 # GENERATE CONFIGS FOR THE SWEEP
 # ============================================================================
 
 # SEEDS FOR THE SWEEP
-SEEDS = [0, 1, 2, 3, 4, 5]
+SEEDS = [0, 1, 2, 3, 4]
 
 LR_CONFIGS = []
 for seed in SEEDS:
     for key, value in w_lr_coefs_noncentered_dict.items():
-
         for magnitude in [-7.5, -5., -2.5, -1, 0, 1, 2.5, 5., 7.5]:
             direction = value['coef']
             LR_CONFIGS.append({
@@ -70,7 +73,22 @@ for seed in SEEDS:
                 'direction': direction,
             })
 
-INTERVENTION_CONFIGS = LR_CONFIGS
+LR_CONFIGS_LAGGED_DELTA = []
+for seed in SEEDS:
+    for key, value in w_lr_coefs_noncentered_lagged_delta_dict.items():
+        for magnitude in [-7.5, -5., -2.5, -1, 0, 1, 2.5, 5., 7.5]:
+            LR_CONFIGS_LAGGED_DELTA.append({
+                'type': 'directional_addition',
+                'location': 'encoder_output',
+                'magnitude': magnitude,
+                'seed': seed,
+                'direction_str': key,
+                'r2': value['r2'],
+                'direction': value['coef'],
+            })
+
+INTERVENTION_CONFIGS = LR_CONFIGS_LAGGED_DELTA
+#LR_CONFIGS
 
 # Base directory for saving results
 BASE_SAVE_DIR = f'logs/25-12-15-control-position-cartpole-swingup-noncentered_sweep'
@@ -110,9 +128,9 @@ def setup_intervention(patcher, config, start_step, end_step):
         magnitude = config['magnitude']
         patcher.add_directional_addition(location,
                                          magnitude=magnitude,
-                                         direction=direction,
-                                         start_step=start_step,
-                                         end_step=end_step)
+                                         direction=direction)
+        #start_step=start_step,
+        #end_step=end_step)
     else:
         raise ValueError(f"Unknown intervention type: {intervention_type}")
 
@@ -173,7 +191,7 @@ def main():
         patcher = ActivationPatcher(
             agent.model,
             modules_to_hook=['encoder_output'],
-            renormalize_after_intervention=False,
+            #renormalize_after_intervention=False,
         )
 
         config['normalization_method'] = None
