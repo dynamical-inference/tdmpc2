@@ -44,8 +44,10 @@ MANIFEST
 *.mp4
 *.npz
 *.npy
+*.gif
 logs
 analysis/exploratory
+outputs
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
