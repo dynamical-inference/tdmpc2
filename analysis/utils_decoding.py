@@ -5,6 +5,16 @@ from sklearn.metrics import r2_score
 from tqdm import tqdm
 
 
+def standardize_fit(X, eps=1e-8):
+    mu = X.mean(axis=0, keepdims=True)
+    sd = X.std(axis=0, keepdims=True) + eps
+    return mu, sd
+
+
+def standardize_apply(X, mu, sd):
+    return (X - mu) / sd
+
+
 def make_lagged_pairs_for_episode(x_ep, y_ep, lag, predict_difference=False):
     """
     Build (X, Y) pairs within one episode for given lag.
