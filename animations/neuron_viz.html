@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TD-MPC2 Neuron Activation Visualizer</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg-primary: #0a0e14;
+            --bg-secondary: #131920;
+            --bg-tertiary: #1a2029;
+            --accent-cyan: #39bae6;
+            --accent-orange: #ff8f40;
+            --accent-green: #7fd962;
+            --accent-purple: #d2a6ff;
+            --accent-red: #f07178;
+            --text-primary: #e6e6e6;
+            --text-secondary: #6e7a8a;
+            --border-color: #2d3640;
+        }
+        
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        /* Background gradient effect */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(ellipse at 20% 20%, rgba(57, 186, 230, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(210, 166, 255, 0.06) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            font-weight: 400;
+        }
+        
+        /* Section styling */
+        .section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        
+        .section-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            font-weight: 500;
+        }
+        
+        /* Variable Selector */
+        .variable-selector {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .var-btn {
+            padding: 12px 24px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .var-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, transparent, rgba(255,255,255,0.05));
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .var-btn:hover::before {
+            opacity: 1;
+        }
+        
+        .var-btn:hover {
+            border-color: var(--accent-cyan);
+            transform: translateY(-2px);
+        }
+        
+        .var-btn.active {
+            border-color: var(--accent-cyan);
+            background: linear-gradient(135deg, rgba(57, 186, 230, 0.2), rgba(57, 186, 230, 0.1));
+            box-shadow: 0 0 20px rgba(57, 186, 230, 0.3);
+        }
+        
+        .var-btn[data-var="position"].active { 
+            border-color: var(--accent-green); 
+            background: linear-gradient(135deg, rgba(127, 217, 98, 0.2), rgba(127, 217, 98, 0.1));
+            box-shadow: 0 0 20px rgba(127, 217, 98, 0.3);
+        }
+        .var-btn[data-var="velocity"].active { 
+            border-color: var(--accent-cyan); 
+            background: linear-gradient(135deg, rgba(57, 186, 230, 0.2), rgba(57, 186, 230, 0.1));
+            box-shadow: 0 0 20px rgba(57, 186, 230, 0.3);
+        }
+        .var-btn[data-var="angle"].active { 
+            border-color: var(--accent-orange); 
+            background: linear-gradient(135deg, rgba(255, 143, 64, 0.2), rgba(255, 143, 64, 0.1));
+            box-shadow: 0 0 20px rgba(255, 143, 64, 0.3);
+        }
+        .var-btn[data-var="angular_velocity"].active { 
+            border-color: var(--accent-red); 
+            background: linear-gradient(135deg, rgba(240, 113, 120, 0.2), rgba(240, 113, 120, 0.1));
+            box-shadow: 0 0 20px rgba(240, 113, 120, 0.3);
+        }
+        
+        /* Video player */
+        .video-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+        
+        .video-wrapper {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        .video-container video {
+            width: 100%;
+            display: block;
+            border-radius: 8px;
+        }
+        
+        .video-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 12px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.8));
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+        
+        .state-mini-panel {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        .state-mini-item {
+            background: rgba(0,0,0,0.3);
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .state-mini-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        
+        .state-mini-value {
+            font-weight: 600;
+        }
+        
+        .state-mini-item[data-state="position"] .state-mini-value { color: var(--accent-green); }
+        .state-mini-item[data-state="velocity"] .state-mini-value { color: var(--accent-cyan); }
+        .state-mini-item[data-state="angle"] .state-mini-value { color: var(--accent-orange); }
+        .state-mini-item[data-state="angular_velocity"] .state-mini-value { color: var(--accent-red); }
+        
+        @media (max-width: 900px) {
+            .video-section {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Grid containers */
+        .grids-container {
+            display: grid;
+            gap: 24px;
+        }
+        
+        .grid-wrapper {
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .grid-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .activation-grid {
+            background: var(--bg-primary);
+            padding: 4px;
+            border-radius: 8px;
+        }
+        
+        .activation-canvas {
+            width: 100%;
+            border-radius: 4px;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        
+        /* Playback controls */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .play-btn {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: 2px solid var(--accent-cyan);
+            background: var(--bg-tertiary);
+            color: var(--accent-cyan);
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        
+        .play-btn:hover {
+            background: var(--accent-cyan);
+            color: var(--bg-primary);
+            box-shadow: 0 0 25px rgba(57, 186, 230, 0.5);
+        }
+        
+        .timeline-container {
+            flex: 1;
+            min-width: 300px;
+        }
+        
+        .timeline {
+            width: 100%;
+            height: 8px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .timeline::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(57, 186, 230, 0.5);
+            transition: transform 0.1s;
+        }
+        
+        .timeline::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+        
+        .time-display {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            color: var(--accent-cyan);
+            min-width: 120px;
+            text-align: center;
+        }
+        
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .speed-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .speed-btn:hover, .speed-btn.active {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+        
+        /* Info footer */
+        .info-footer {
+            text-align: center;
+            margin-top: 20px;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+        
+        .highlight-label {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            font-weight: 500;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 16px; }
+            h1 { font-size: 1.6rem; }
+            .var-btn { padding: 10px 16px; font-size: 0.85rem; }
+        }
+        
+        /* Loading animation */
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        
+        .loading .neuron-cell {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧠 TD-MPC2 Neuron Visualizer</h1>
+            <p class="subtitle">Real-time visualization of what latent neurons encode</p>
+        </header>
+        
+        <!-- Variable Selector -->
+        <section class="section">
+            <div class="section-title">Variable Selector</div>
+            <div class="variable-selector">
+                <button class="var-btn active" data-var="position">Position</button>
+                <button class="var-btn" data-var="velocity">Velocity</button>
+                <button class="var-btn" data-var="angle">Angle</button>
+                <button class="var-btn" data-var="angular_velocity">Ang. Vel.</button>
+            </div>
+        </section>
+        
+        <!-- Video + Grids Section -->
+        <section class="section">
+            <div class="video-section">
+                <!-- Video Player -->
+                <div class="video-wrapper">
+                    <div class="grid-label">Environment View</div>
+                    <div class="video-container">
+                        <video id="env-video" muted loop>
+                            <source src="20260104_185854/cartpole-swingup.mp4" type="video/mp4">
+                            Your browser does not support the video tag.
+                        </video>
+                        <div class="video-overlay">
+                            <div style="font-size: 1.1rem; margin-bottom: 4px;">🎮 Cartpole Swingup</div>
+                            <div class="state-mini-panel">
+                                <div class="state-mini-item" data-state="position">
+                                    <span class="state-mini-label">Pos</span>
+                                    <span class="state-mini-value" id="mini-position">0.00</span>
+                                </div>
+                                <div class="state-mini-item" data-state="velocity">
+                                    <span class="state-mini-label">Vel</span>
+                                    <span class="state-mini-value" id="mini-velocity">0.00</span>
+                                </div>
+                                <div class="state-mini-item" data-state="angle">
+                                    <span class="state-mini-label">Angle</span>
+                                    <span class="state-mini-value" id="mini-angle">0°</span>
+                                </div>
+                                <div class="state-mini-item" data-state="angular_velocity">
+                                    <span class="state-mini-label">Ang.V</span>
+                                    <span class="state-mini-value" id="mini-angular_velocity">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Activation Grids (Canvas for performance) -->
+                <div class="grids-container">
+                    <div class="grid-wrapper">
+                        <div class="grid-label">All Neuron Activations (512 neurons)</div>
+                        <div class="activation-grid">
+                            <canvas id="all-canvas" class="activation-canvas"></canvas>
+                        </div>
+                    </div>
+                    <div class="grid-wrapper">
+                        <div class="grid-label" id="filtered-label">Neurons Encoding: Position</div>
+                        <div class="activation-grid">
+                            <canvas id="filtered-canvas" class="activation-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Playback Controls -->
+        <section class="section">
+            <div class="section-title">Timeline</div>
+            <div class="controls">
+                <button class="play-btn" id="play-btn">▶</button>
+                <div class="timeline-container">
+                    <input type="range" class="timeline" id="timeline" min="0" max="499" value="0">
+                </div>
+                <div class="time-display" id="time-display">t = 0 / 500</div>
+                <div class="speed-control">
+                    <button class="speed-btn" data-speed="0.5">0.5x</button>
+                    <button class="speed-btn active" data-speed="1">1x</button>
+                    <button class="speed-btn" data-speed="2">2x</button>
+                </div>
+            </div>
+        </section>
+        
+        <div class="info-footer">
+            <div>TD-MPC2 Latent Space Interpretability</div>
+            <div class="highlight-label" id="neuron-count">Highlighting 64 neurons for Position</div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // CONFIGURATION
+        // ============================================
+        const CONFIG = {
+            nNeurons: 512,
+            nTimesteps: 500,  // Match video frames (500 frames)
+            gridCols: 32,  // 32 x 16 = 512 neurons
+            fps: 30,
+        };
+        
+        // Variable colors
+        const VAR_COLORS = {
+            position: { h: 100, s: 70, l: 55 },      // Green
+            velocity: { h: 195, s: 85, l: 55 },     // Cyan
+            angle: { h: 25, s: 100, l: 62 },        // Orange
+            angular_velocity: { h: 355, s: 85, l: 65 }, // Red
+        };
+        
+        // ============================================
+        // DATA LOADING
+        // ============================================
+        const DATA_URL = '20260104_185854/episode_data.json';
+        
+        function generateFakeNeuronMapping(nNeurons) {
+            // Generate FAKE neuron mappings (which neurons encode which variables)
+            // This will be replaced with real decoder weights later
+            const neuronMapping = {};
+            const variables = ['position', 'velocity', 'angle', 'angular_velocity'];
+            
+            // Use a seeded random for reproducibility
+            let seed = 42;
+            const seededRandom = () => {
+                seed = (seed * 9301 + 49297) % 233280;
+                return seed / 233280;
+            };
+            
+            variables.forEach(v => {
+                const importance = new Array(nNeurons).fill(0);
+                // Randomly assign ~64 neurons to strongly encode this variable
+                const nStrong = 64;
+                const strongIndices = [];
+                while (strongIndices.length < nStrong) {
+                    const idx = Math.floor(seededRandom() * nNeurons);
+                    if (!strongIndices.includes(idx)) {
+                        strongIndices.push(idx);
+                        importance[idx] = 0.5 + seededRandom() * 0.5;
+                    }
+                }
+                // Some weak encoding for others
+                for (let i = 0; i < nNeurons; i++) {
+                    if (importance[i] === 0) {
+                        importance[i] = seededRandom() * 0.2;
+                    }
+                }
+                neuronMapping[v] = {
+                    importance: importance,
+                    strongIndices: strongIndices,
+                };
+            });
+            
+            return neuronMapping;
+        }
+        
+        async function loadData() {
+            try {
+                console.log(`Loading data from ${DATA_URL}...`);
+                const response = await fetch(DATA_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const jsonData = await response.json();
+                
+                // Update CONFIG based on loaded data
+                CONFIG.nTimesteps = jsonData.metadata.n_timesteps;
+                CONFIG.nNeurons = jsonData.metadata.n_neurons;
+                
+                // Update timeline max
+                document.getElementById('timeline').max = CONFIG.nTimesteps - 1;
+                
+                console.log(`Loaded ${CONFIG.nTimesteps} timesteps, ${CONFIG.nNeurons} neurons`);
+                
+                // Generate fake neuron mapping (to be replaced with real decoder weights)
+                const neuronMapping = generateFakeNeuronMapping(CONFIG.nNeurons);
+                
+                return {
+                    activations: jsonData.activations,
+                    observations: jsonData.observations,
+                    neuronMapping: neuronMapping,
+                };
+            } catch (error) {
+                console.error('Failed to load data:', error);
+                console.log('Falling back to fake data...');
+                return generateFallbackData();
+            }
+        }
+        
+        function generateFallbackData() {
+            // Fallback fake data if JSON fails to load
+            const data = {
+                activations: [],
+                observations: {
+                    position: [],
+                    velocity: [],
+                    angle: [],
+                    angular_velocity: [],
+                },
+                neuronMapping: generateFakeNeuronMapping(CONFIG.nNeurons),
+            };
+            
+            for (let t = 0; t < CONFIG.nTimesteps; t++) {
+                const phase = t / CONFIG.nTimesteps * Math.PI * 10;
+                data.observations.position.push(Math.sin(phase * 0.3) * 0.8);
+                data.observations.velocity.push(Math.cos(phase * 0.3) * 1.5);
+                data.observations.angle.push(Math.sin(phase * 0.8) * 180 * Math.exp(-t / 150));
+                data.observations.angular_velocity.push(Math.cos(phase * 0.8) * 5);
+                
+                const frame = [];
+                for (let n = 0; n < CONFIG.nNeurons; n++) {
+                    frame.push(Math.random());
+                }
+                data.activations.push(frame);
+            }
+            
+            return data;
+        }
+        
+        // ============================================
+        // VISUALIZATION STATE
+        // ============================================
+        let DATA = null;  // Will be loaded async
+        let currentTime = 0;
+        let selectedVar = 'position';
+        let isPlaying = false;
+        let playbackSpeed = 1;
+        let animationId = null;
+        let lastFrameTime = 0;
+        let videoElement = null;
+        let videoDuration = 0;
+        let videoReady = false;
+        
+        // ============================================
+        // CANVAS RENDERING (Fast!)
+        // ============================================
+        let allCanvas, allCtx, filteredCanvas, filteredCtx;
+        const CELL_SIZE = 12;  // Pixels per neuron cell
+        const GRID_COLS = CONFIG.gridCols;
+        const GRID_ROWS = Math.ceil(CONFIG.nNeurons / GRID_COLS);
+        
+        function initCanvases() {
+            allCanvas = document.getElementById('all-canvas');
+            filteredCanvas = document.getElementById('filtered-canvas');
+            
+            const width = GRID_COLS * CELL_SIZE;
+            const height = GRID_ROWS * CELL_SIZE;
+            
+            // Set canvas resolution
+            allCanvas.width = width;
+            allCanvas.height = height;
+            filteredCanvas.width = width;
+            filteredCanvas.height = height;
+            
+            // Get contexts
+            allCtx = allCanvas.getContext('2d');
+            filteredCtx = filteredCanvas.getContext('2d');
+            
+            console.log(`Canvas initialized: ${width}x${height}px`);
+        }
+        
+        function hslToRgb(h, s, l) {
+            s /= 100;
+            l /= 100;
+            const a = s * Math.min(l, 1 - l);
+            const f = n => {
+                const k = (n + h / 30) % 12;
+                return l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+            };
+            return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+        }
+        
+        function activationToRgbRainbow(value) {
+            const hue = (1 - value) * 270;
+            const saturation = 70 + value * 30;
+            const lightness = 25 + value * 45;
+            return hslToRgb(hue, saturation, lightness);
+        }
+        
+        function activationToRgbVar(value, variable) {
+            const { h, s, l } = VAR_COLORS[variable];
+            const lightness = 15 + value * 70;
+            return hslToRgb(h, s, lightness);
+        }
+        
+        function renderCanvas(ctx, activations, colorFn) {
+            const imageData = ctx.createImageData(ctx.canvas.width, ctx.canvas.height);
+            const data = imageData.data;
+            
+            for (let n = 0; n < CONFIG.nNeurons; n++) {
+                const col = n % GRID_COLS;
+                const row = Math.floor(n / GRID_COLS);
+                const val = activations[n];
+                const [r, g, b] = colorFn(val, n);
+                
+                // Fill cell pixels
+                for (let py = 0; py < CELL_SIZE; py++) {
+                    for (let px = 0; px < CELL_SIZE; px++) {
+                        const x = col * CELL_SIZE + px;
+                        const y = row * CELL_SIZE + py;
+                        const idx = (y * ctx.canvas.width + x) * 4;
+                        data[idx] = r;
+                        data[idx + 1] = g;
+                        data[idx + 2] = b;
+                        data[idx + 3] = 255;
+                    }
+                }
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+        }
+        
+        function updateGrids() {
+            // Safety bounds check
+            if (!DATA || !DATA.activations || currentTime < 0 || currentTime >= DATA.activations.length) {
+                console.warn(`Invalid time: ${currentTime}, max: ${DATA?.activations?.length}`);
+                return;
+            }
+            
+            const activations = DATA.activations[currentTime];
+            const mapping = DATA.neuronMapping[selectedVar];
+            const threshold = 0.4;
+            
+            // Render all-neurons canvas (rainbow)
+            renderCanvas(allCtx, activations, (val, n) => activationToRgbRainbow(val));
+            
+            // Render filtered canvas (highlight important neurons)
+            renderCanvas(filteredCtx, activations, (val, n) => {
+                const importance = mapping.importance[n];
+                if (importance >= threshold) {
+                    return activationToRgbVar(val, selectedVar);
+                } else {
+                    // Dimmed gray
+                    const gray = Math.round(25 + val * 25);
+                    return [gray, gray, Math.round(gray * 1.1)];
+                }
+            });
+            
+            // Update state values (mini panel on video overlay only)
+            const obs = DATA.observations;
+            const pos = obs.position[currentTime].toFixed(2);
+            const vel = obs.velocity[currentTime].toFixed(2);
+            const ang = obs.angle[currentTime].toFixed(1) + '°';
+            const angVel = obs.angular_velocity[currentTime].toFixed(2);
+            
+            document.getElementById('mini-position').textContent = pos;
+            document.getElementById('mini-velocity').textContent = vel;
+            document.getElementById('mini-angle').textContent = ang;
+            document.getElementById('mini-angular_velocity').textContent = angVel;
+            
+            // Update time display
+            document.getElementById('time-display').textContent = `t = ${currentTime} / ${CONFIG.nTimesteps}`;
+            document.getElementById('timeline').value = currentTime;
+            
+            // Sync video to neuron time when NOT playing (scrubbing, arrow keys, etc.)
+            // When playing, the video drives and neurons follow, so no need to sync here
+            if (!isPlaying && videoElement && videoDuration > 0) {
+                const targetVideoTime = (currentTime / CONFIG.nTimesteps) * videoDuration;
+                videoElement.currentTime = targetVideoTime;
+            }
+            
+            // Update neuron count
+            const strongCount = mapping.strongIndices.length;
+            const varName = selectedVar.replace('_', ' ');
+            document.getElementById('neuron-count').textContent = 
+                `Highlighting ${strongCount} neurons encoding ${varName.charAt(0).toUpperCase() + varName.slice(1)}`;
+        }
+        
+        // ============================================
+        // ANIMATION LOOP
+        // ============================================
+        function animate(timestamp) {
+            if (!isPlaying) return;
+            
+            // VIDEO DRIVES - neurons sync to video time
+            if (videoElement && videoDuration > 0) {
+                const progress = videoElement.currentTime / videoDuration;
+                currentTime = Math.min(Math.floor(progress * CONFIG.nTimesteps), CONFIG.nTimesteps - 1);
+                
+                // Handle video end - loop
+                if (videoElement.ended) {
+                    videoElement.currentTime = 0;
+                    currentTime = 0;
+                }
+            } else {
+                // Fallback if no video: timer drives
+                const elapsed = timestamp - lastFrameTime;
+                const frameInterval = 1000 / (CONFIG.fps * playbackSpeed);
+                if (elapsed >= frameInterval) {
+                    lastFrameTime = timestamp;
+                    currentTime = (currentTime + 1) % CONFIG.nTimesteps;
+                }
+            }
+            
+            updateGrids();
+            animationId = requestAnimationFrame(animate);
+        }
+        
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('play-btn');
+            btn.textContent = isPlaying ? '⏸' : '▶';
+            
+            if (isPlaying) {
+                lastFrameTime = performance.now();
+                animationId = requestAnimationFrame(animate);
+                
+                // Start video - it will drive the neurons
+                if (videoElement) {
+                    videoElement.playbackRate = playbackSpeed;
+                    videoElement.play().catch(e => console.log('Video play blocked:', e));
+                }
+            } else {
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                }
+                if (videoElement) {
+                    videoElement.pause();
+                }
+            }
+        }
+        
+        // ============================================
+        // EVENT HANDLERS
+        // ============================================
+        function setupEventListeners() {
+            // Variable selector buttons
+            document.querySelectorAll('.var-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.var-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    selectedVar = btn.dataset.var;
+                    
+                    // Update label
+                    const varName = selectedVar.replace('_', ' ');
+                    document.getElementById('filtered-label').textContent = 
+                        `Neurons Encoding: ${varName.charAt(0).toUpperCase() + varName.slice(1)}`;
+                    
+                    updateGrids();
+                });
+            });
+            
+            // Play button
+            document.getElementById('play-btn').addEventListener('click', togglePlay);
+            
+            // Timeline scrubber
+            const timeline = document.getElementById('timeline');
+            timeline.addEventListener('input', (e) => {
+                currentTime = parseInt(e.target.value);
+                updateGrids();  // This will also sync the video
+            });
+            
+            // Speed controls
+            document.querySelectorAll('.speed-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    playbackSpeed = parseFloat(btn.dataset.speed);
+                    if (videoElement) {
+                        videoElement.playbackRate = playbackSpeed;
+                    }
+                });
+            });
+            
+            // Keyboard controls
+            document.addEventListener('keydown', (e) => {
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                    togglePlay();
+                } else if (e.code === 'ArrowRight') {
+                    currentTime = Math.min(currentTime + 1, CONFIG.nTimesteps - 1);
+                    updateGrids();
+                } else if (e.code === 'ArrowLeft') {
+                    currentTime = Math.max(currentTime - 1, 0);
+                    updateGrids();
+                }
+            });
+        }
+        
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        function initVideo() {
+            videoElement = document.getElementById('env-video');
+            
+            if (videoElement) {
+                videoElement.addEventListener('loadedmetadata', () => {
+                    videoDuration = videoElement.duration;
+                    videoReady = true;
+                    videoElement.currentTime = 0;
+                    console.log(`Video loaded: ${videoDuration.toFixed(2)}s, ${CONFIG.nTimesteps} data frames`);
+                });
+                
+                videoElement.addEventListener('error', (e) => {
+                    console.log('Video failed to load. Neurons will still animate.');
+                });
+            }
+        }
+        
+        async function init() {
+            console.log('Initializing TD-MPC2 Neuron Visualizer...');
+            
+            // Load data (real or fallback)
+            DATA = await loadData();
+            
+            console.log(`Loaded: ${CONFIG.nNeurons} neurons, ${CONFIG.nTimesteps} timesteps`);
+            
+            // Initialize video
+            initVideo();
+            
+            // Initialize canvases (fast rendering!)
+            initCanvases();
+            
+            // Setup event listeners
+            setupEventListeners();
+            
+            // Initial render
+            updateGrids();
+            
+            console.log('Initialization complete! Using Canvas for 60fps rendering.');
+        }
+        
+        // Start when DOM is ready
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
+
