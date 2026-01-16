@@ -148,13 +148,19 @@ class Pixels(gym.Wrapper):
             self._frames.append(frame)
         return torch.from_numpy(np.concatenate(self._frames))
 
-    def reset(self):
-        self.env.reset()
+    def reset(self, **kwargs):
+        # Forward kwargs (e.g., initial_state) to the underlying env reset.
+        self.env.reset(**kwargs)
         return self._get_obs(is_reset=True)
 
     def step(self, action):
         _, reward, done, info = self.env.step(action)
         return self._get_obs(), reward, done, info
+
+    def get_state_obs(self):
+        """Return state observation from the underlying DMControl env."""
+        obs = self.env.env.task.get_observation(self.env.env.physics)
+        return self.env._obs_to_array(obs)
 
 
 def make_env(cfg):
@@ -178,5 +184,36 @@ def make_env(cfg):
     env = DMControlWrapper(env, domain, initial_state=initial_state)
     if cfg.obs == 'rgb':
         env = Pixels(env, cfg)
+    env = Timeout(env, max_episode_steps=500)
+    return env
+
+
+def make_env_v2(task, obs='state', seed=0, initial_state=None):
+    """
+    (Rodrigo): Modified version of make_env without cfg.
+    Make DMControl environment with optional initial state support.
+    Adapted from https://github.com/facebookresearch/drqv2
+    
+    Args:
+        task: Task name (e.g., 'cheetah_run')
+        obs: Observation type ('state' or 'rgb')
+        seed: Random seed
+        initial_state: Optional initial state dict
+    """
+    domain, task_name = task.replace('-', '_').split('_', 1)
+    domain = dict(cup='ball_in_cup', pointmass='point_mass').get(domain, domain)
+    if (domain, task_name) not in suite.ALL_TASKS:
+        raise ValueError('Unknown task:', task_name)
+    assert obs in {'state',
+                   'rgb'}, 'This task only supports state and rgb observations.'
+    env = suite.load(domain,
+                     task_name,
+                     task_kwargs={'random': seed},
+                     visualize_reward=False)
+    env = action_scale.Wrapper(env, minimum=-1., maximum=1.)
+    # Get initial state from config if provided
+    env = DMControlWrapper(env, domain, initial_state=initial_state)
+    if obs == 'rgb':
+        env = Pixels(env, cfg=None)
     env = Timeout(env, max_episode_steps=500)
     return env
