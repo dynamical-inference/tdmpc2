@@ -120,23 +120,33 @@ class ActivationPatcher:
     
     Compatible with EpisodeDataRecorder: if both are used together, the recorder
     will automatically capture the MODIFIED activations after patches are applied.
+
+    Layer-level hooks:
+        Pass hook_encoder_layers=True and/or hook_dynamics_layers=True to record
+        outputs at every layer. Layer activations are stored under keys like:
+            encoder_layer/<obs_key>/<layer_idx>
+            dynamics_layer/<layer_idx>
     """
 
     def __init__(
-        self,
-        model,
-        modules_to_hook: List[str] = [
-            'encoder_output',  # Latent state z
-            'dynamics_output',  # Predicted next latent
-            'reward_output',  # Predicted reward
-            'pi_output',  # Policy output
-            'q_output',  # Q-function output
-        ]):
+            self,
+            model,
+            modules_to_hook: List[str] = [
+                'encoder_output',  # Latent state z
+                'dynamics_output',  # Predicted next latent
+                'reward_output',  # Predicted reward
+                'pi_output',  # Policy output
+                'q_output',  # Q-function output
+            ],
+            hook_encoder_layers: bool = False,
+            hook_dynamics_layers: bool = False):
         """
         Initialize activation patcher.
 
         Args:
             model: WorldModel instance to attach hooks to
+            hook_encoder_layers: If True, record every encoder layer output
+            hook_dynamics_layers: If True, record every dynamics layer output
         """
         self.model = model
         self.hooks = []
@@ -144,6 +154,8 @@ class ActivationPatcher:
         self.interventions = {}  # Stores intervention functions
         self.enabled = True  # Global enable/disable
         self.modules_to_hook = modules_to_hook
+        self.hook_encoder_layers = hook_encoder_layers
+        self.hook_dynamics_layers = hook_dynamics_layers
         self.directions = {
         }  # Stores named direction vectors for directional interventions
         self.current_step = 0  # Current step counter for step-gated interventions
@@ -154,9 +166,19 @@ class ActivationPatcher:
         print("ActivationPatcher initialized with hooks on:")
         for module in self.modules_to_hook:
             print(f"  - {module}")
+        if self.hook_encoder_layers:
+            print("  - encoder_layers/*")
+        if self.hook_dynamics_layers:
+            print("  - dynamics_layers/*")
 
     def _setup_hooks(self):
         """Register forward hooks on world model components."""
+        module_map = {
+            'dynamics_output': '_dynamics',
+            'reward_output': '_reward',
+            'pi_output': '_pi',
+            'q_output': '_Qs',
+        }
 
         for module in self.modules_to_hook:
             print(f"Setting up hooks for {module}")
@@ -168,9 +190,20 @@ class ActivationPatcher:
                         encoder.register_forward_hook(
                             self._make_hook('encoder_output')))
             else:
+                attr_name = module_map.get(module, module)
+                if not hasattr(self.model, attr_name):
+                    warnings.warn(
+                        f"Model has no attribute '{attr_name}' for hook '{module}'. Skipping."
+                    )
+                    continue
                 self.hooks.append(
-                    getattr(self.model, module).register_forward_hook(
+                    getattr(self.model, attr_name).register_forward_hook(
                         self._make_hook(module)))
+
+        if self.hook_encoder_layers:
+            self._setup_encoder_layer_hooks()
+        if self.hook_dynamics_layers:
+            self._setup_dynamics_layer_hooks()
 
         # if hasattr(self.model, '_encoder'):
         #     # Register hooks on each encoder in the ModuleDict (e.g., 'state' or 'rgb')
@@ -230,6 +263,42 @@ class ActivationPatcher:
             return output
 
         return hook
+
+    def _setup_encoder_layer_hooks(self):
+        """Register hooks on every encoder layer."""
+        if not hasattr(self.model, '_encoder'):
+            warnings.warn("Model has no _encoder; cannot hook encoder layers.")
+            return
+
+        if "state" not in self.model._encoder:
+            warnings.warn(
+                "Encoder layer hooks only support 'state' observations.")
+            return
+
+        for key, encoder in self.model._encoder.items():
+            if key != "state":
+                continue
+            prefix = f"encoder_layer/{key}"
+            self._register_layer_hooks(encoder, prefix)
+
+    def _setup_dynamics_layer_hooks(self):
+        """Register hooks on every dynamics layer."""
+        if not hasattr(self.model, '_dynamics'):
+            warnings.warn(
+                "Model has no _dynamics; cannot hook dynamics layers.")
+            return
+        self._register_layer_hooks(self.model._dynamics, "dynamics_layer")
+
+    def _register_layer_hooks(self, module, prefix: str):
+        """
+        Register hooks on immediate children of a module.
+
+        For Sequential encoders/MLPs, this captures each layer output.
+        """
+        for name, layer in module.named_children():
+            hook_name = f"{prefix}/{name}"
+            self.hooks.append(
+                layer.register_forward_hook(self._make_hook(hook_name)))
 
     def add_intervention(self, location: str, intervention_fn: Callable):
         """
