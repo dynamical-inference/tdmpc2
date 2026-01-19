@@ -4,6 +4,18 @@ import imageio
 import os
 
 
+def get_state_obs_from_dmcontrol(env):
+    """
+    Return state observation from a DMControl environment, even when wrapped
+    by Pixels. Returns None if unavailable.
+    """
+    if hasattr(env, "get_state_obs"):
+        return env.get_state_obs()
+    if hasattr(env, "env") and hasattr(env.env, "get_state_obs"):
+        return env.env.get_state_obs()
+    raise ValueError("State observation not available for this environment")
+
+
 def run_episode_with_recording(env,
                                agent,
                                episode_recorder=None,
@@ -13,7 +25,8 @@ def run_episode_with_recording(env,
                                task=None,
                                episode_dir=None,
                                task_name=None,
-                               patcher=None):
+                               patcher=None,
+                               state_obs_fn=None):
     """
     Run a single episode with optional recording.
     
@@ -56,6 +69,7 @@ def run_episode_with_recording(env,
 
     # Run episode
     while not done:
+        state_obs = state_obs_fn(env) if state_obs_fn is not None else None
         # Act (agent records planning data internally if enabled)
         action = agent.act(obs, t0=(t == 0), eval_mode=eval_mode, task=task)
 
@@ -65,7 +79,11 @@ def run_episode_with_recording(env,
         # Record episode data if recorder is attached
         if episode_recorder is not None:
             latent_state = agent.get_last_latent()
-            episode_recorder.record_step(obs=obs,
+            record_obs = ({
+                'rgb': obs,
+                'state': state_obs
+            } if state_obs_fn is not None else obs)
+            episode_recorder.record_step(obs=record_obs,
                                          action=action,
                                          reward=reward,
                                          done=done,
