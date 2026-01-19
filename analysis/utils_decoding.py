@@ -3,6 +3,9 @@ import numpy as np
 from sklearn.linear_model import LinearRegression, Lasso, MultiTaskLasso
 from sklearn.metrics import r2_score
 from tqdm import tqdm
+from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 def standardize_fit(X, eps=1e-8):
@@ -77,7 +80,14 @@ def evaluate_lags_leave_k_out(x_eps,
                               predict_difference=False,
                               standardize_X=False,
                               standardize_Y=False,
-                              standardize_eps=1e-8):
+                              standardize_eps=1e-8,
+                              mlp_hidden=(256, 256),
+                              mlp_alpha=1e-4,
+                              mlp_lr=1e-3,
+                              mlp_max_iter=500,
+                              mlp_patience=20,
+                              mlp_val_frac=0.1,
+                              mlp_seed=0):
     """
     Episode-wise CV decoding with optional train-only standardization.
 
@@ -97,6 +107,11 @@ def evaluate_lags_leave_k_out(x_eps,
     assert n_eps == len(y_eps), "x_eps and y_eps must have same length"
     assert n_eps > k_holdout, "k_holdout must be smaller than number of episodes"
 
+    if model == 'mlp' and standardize_X:
+        raise ValueError(
+            "For model='mlp', set standardize_X=False (MLP pipeline already standardizes X)."
+        )
+
     # Enumerate folds (all combinations or sampled subset)
     all_combos = list(combinations(range(n_eps), k_holdout))
     if max_combinations is not None and len(all_combos) > max_combinations:
@@ -111,7 +126,8 @@ def evaluate_lags_leave_k_out(x_eps,
         rng = np.random.default_rng(0)
         y_eps = [y_ep[rng.permutation(len(y_ep))] for y_ep in y_eps]
 
-    r2_by_lag = {lag: [] for lag in lags}
+    test_r2_by_lag = {lag: [] for lag in lags}
+    train_r2_by_lag = {lag: [] for lag in lags}
     model_by_lag = {lag: [] for lag in lags}
 
     for test_idxs in tqdm(all_combos):
@@ -155,55 +171,104 @@ def evaluate_lags_leave_k_out(x_eps,
                 model_to_fit = Lasso(alpha=0.001)
             elif model == 'multi_task_lasso':
                 model_to_fit = MultiTaskLasso(alpha=0.01)
+            elif model == 'mlp':
+                model_to_fit = Pipeline([("scaler",
+                                          StandardScaler(with_mean=True,
+                                                         with_std=True)),
+                                         ("mlp",
+                                          MLPRegressor(
+                                              hidden_layer_sizes=mlp_hidden,
+                                              activation="relu",
+                                              alpha=mlp_alpha,
+                                              learning_rate_init=mlp_lr,
+                                              max_iter=mlp_max_iter,
+                                              early_stopping=True,
+                                              validation_fraction=mlp_val_frac,
+                                              n_iter_no_change=mlp_patience,
+                                              random_state=mlp_seed,
+                                          ))])
             else:
                 raise ValueError(f"Model {model} not supported")
 
             # Fit model on training set
             model_to_fit.fit(X_train_use, Y_train_use)
 
+            # Train R2 (once per fold/lag)
+            Y_pred_train_use = model_to_fit.predict(X_train_use)
+            if standardize_Y:
+                Y_pred_train = Y_pred_train_use * Y_sd + Y_mu
+            else:
+                Y_pred_train = Y_pred_train_use
+            train_r2 = r2_score(Y_train,
+                                Y_pred_train,
+                                multioutput='variance_weighted')
+
             # Evaluate on held-out episodes
-            fold_r2s = []
+            test_fold_r2s = []
             for j in test_idxs:
-                X_te, Y_te = make_lagged_pairs_for_episode(
+                X_test, Y_test = make_lagged_pairs_for_episode(
                     x_eps[j],
                     y_eps[j],
                     lag,
                     predict_difference=predict_difference)
 
                 if standardize_X:
-                    X_te_use = standardize_apply(X_te, X_mu, X_sd)
+                    X_test_use = standardize_apply(X_test, X_mu, X_sd)
                 else:
-                    X_te_use = X_te
+                    X_test_use = X_test
+
+                Y_pred_test_use = model_to_fit.predict(X_test_use)
 
                 # Predict in standardized Y space if requested, then invert
-                Y_pred_use = model_to_fit.predict(X_te_use)
                 if standardize_Y:
-                    Y_pred = Y_pred_use * Y_sd + Y_mu
+                    Y_pred_test = Y_pred_test_use * Y_sd + Y_mu
                 else:
-                    Y_pred = Y_pred_use
+                    Y_pred_test = Y_pred_test_use
 
-                r2 = r2_score(Y_te, Y_pred, multioutput='variance_weighted')
-                fold_r2s.append(r2)
+                test_r2 = r2_score(Y_test,
+                                   Y_pred_test,
+                                   multioutput='variance_weighted')
 
-            r2_by_lag[lag].append(float(np.mean(fold_r2s)))
+                test_fold_r2s.append(test_r2)
+
+            test_r2_by_lag[lag].append(float(np.mean(test_fold_r2s)))
+            train_r2_by_lag[lag].append(float(train_r2))
             model_by_lag[lag].append(model_to_fit)
 
-    r2_mean = {lag: float(np.mean(vals)) for lag, vals in r2_by_lag.items()}
-    r2_std = {
-        lag: float(np.std(vals, ddof=1)) for lag, vals in r2_by_lag.items()
+    train_r2_mean = {
+        lag: float(np.mean(vals)) for lag, vals in train_r2_by_lag.items()
+    }
+    train_r2_std = {
+        lag: float(np.std(vals, ddof=1))
+        for lag, vals in train_r2_by_lag.items()
+    }
+    test_r2_mean = {
+        lag: float(np.mean(vals)) for lag, vals in test_r2_by_lag.items()
+    }
+    test_r2_std = {
+        lag: float(np.std(vals, ddof=1)) for lag, vals in test_r2_by_lag.items()
     }
 
     results = {
-        'r2_mean': r2_mean,
-        'r2_std': r2_std,
-        'r2_by_lag': r2_by_lag,
+        'train_r2_mean': train_r2_mean,
+        'train_r2_std': train_r2_std,
+        'test_r2_mean': test_r2_mean,
+        'test_r2_std': test_r2_std,
+        'train_r2_by_lag': train_r2_by_lag,
+        'test_r2_by_lag': test_r2_by_lag,
         'model_by_lag': model_by_lag,
     }
 
+    print(results)
+
     if add_bootstrap_ci:
-        results['r2_ci'] = {
+        results['train_r2_ci'] = {
             lag: bootstrap_ci(vals, alpha=alpha, n_boot=n_bootstrap)
-            for lag, vals in r2_by_lag.items()
+            for lag, vals in train_r2_by_lag.items()
+        }
+        results['test_r2_ci'] = {
+            lag: bootstrap_ci(vals, alpha=alpha, n_boot=n_bootstrap)
+            for lag, vals in test_r2_by_lag.items()
         }
 
     return results
