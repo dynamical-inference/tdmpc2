@@ -186,9 +186,8 @@ def enc(cfg, out=None):
         else:
             raise NotImplementedError(
                 f"Encoder for observation type {k} not implemented.")
-    encoder = nn.ModuleDict(out)
-    print("Encoder:", encoder)
-    return encoder
+
+    return nn.ModuleDict(out)
 
 
 def api_model_conversion(target_state_dict, source_state_dict):
