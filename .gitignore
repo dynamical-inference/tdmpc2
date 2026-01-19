@@ -45,6 +45,8 @@ MANIFEST
 *.npz
 *.npy
 *.gif
+*.pt
+*pth
 logs
 analysis/exploratory
 outputs
