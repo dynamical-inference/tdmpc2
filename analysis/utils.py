@@ -260,7 +260,9 @@ def reconstruct_cartpole_dmcontrol(states,
                                    width=320,
                                    camera_id=0,
                                    save_video=False,
-                                   out_path=None):
+                                   out_path=None,
+                                   show=False,
+                                   return_frames=False):
     from dm_control import suite
 
     if save_video:
@@ -284,7 +286,37 @@ def reconstruct_cartpole_dmcontrol(states,
         assert out_path is not None, "out_path must be provided if save_video is True"
         imageio.mimwrite(out_path, frames, fps=30, macro_block_size=None)
         print(f"Wrote {len(frames)} frames to {os.path.abspath(out_path)}")
-    return frames
+    if show:
+        try:
+            from IPython import get_ipython
+            in_notebook = get_ipython() is not None
+        except Exception:
+            in_notebook = False
+        if not in_notebook:
+            print(
+                "show=True requested, but no IPython kernel detected. Skipping display."
+            )
+        else:
+            try:
+                from IPython.display import Video, display
+                if save_video and out_path is not None:
+                    display(Video(out_path, embed=True))
+                else:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".mp4",
+                                                     delete=False) as tmp:
+                        tmp_path = tmp.name
+                    imageio.mimwrite(tmp_path,
+                                     frames,
+                                     fps=30,
+                                     macro_block_size=None)
+                    display(Video(tmp_path, embed=True))
+            except Exception as exc:
+                print(f"Failed to display video inline: {exc}")
+    if return_frames:
+        return frames
+    else:
+        return
 
 
 def load_data(
@@ -293,6 +325,7 @@ def load_data(
     pole_angle=None,
     normalization_method=None,
     seed=None,
+    episode_file_name="episode_data.pkl",
 ):
     """
     Load intervention data from directories matching the specified criteria.
@@ -338,7 +371,7 @@ def load_data(
     results = []
     for config in tqdm(filtered_configs):
         directory = Path(config['directory'])
-        episode_path = directory / "activations" / "episode_0000.pkl"
+        episode_path = directory / "activations" / episode_file_name
 
         if episode_path.exists():
             # Load the pickled episode data
@@ -381,7 +414,8 @@ def flatten_dict(d, parent_key='', sep='_'):
     return dict(items)
 
 
-def load_sweep_metadata(sweep_base_dirs):
+def load_sweep_metadata(sweep_base_dirs,
+                        json_file_name="episode_metadata.json"):
     """
     Load and flatten metadata from one or more sweep base directories.
 
@@ -401,7 +435,7 @@ def load_sweep_metadata(sweep_base_dirs):
     for sweep_base_dir in sweep_base_dirs:
         sweep_dirs = [d for d in sweep_base_dir.iterdir() if d.is_dir()]
         for sweep_dir in tqdm(sweep_dirs, desc=f"Dirs in {sweep_base_dir}"):
-            metadata_path = sweep_dir / "activations" / "episode_0000_metadata.json"
+            metadata_path = sweep_dir / "activations" / json_file_name
             if metadata_path.exists():
                 with open(metadata_path, 'r') as f:
                     try:
@@ -469,3 +503,63 @@ def compute_success(df_data,
     column_name = column_name if column_name is not None else 'success'
     df_data[column_name] = np.array(success)
     return df_data
+
+
+def compute_success(df_data,
+                    threshold_angle=0.1,
+                    consecutive_steps=100,
+                    starting_step=0,
+                    column_name=None):
+    """
+    Compute whether the pole is upright (straight) for consecutive_steps time points.
+    
+    Args:
+        df_data: DataFrame with 'observations' column containing state arrays
+        threshold_angle: Maximum angle deviation from vertical (in radians) to consider "straight"
+        consecutive_steps: Number of consecutive steps required for success
+    
+    Returns:
+        df_data: DataFrame with added 'success' column and 'percentage_straight' column
+    """
+    success = []
+    percentage_straight = []
+
+    for idx in range(len(df_data)):
+        observations = np.array(df_data['observations'].iloc[idx])
+        observations = observations[starting_step:]
+
+        # Extract cos and sin of pole angle (dimensions 1 and 2)
+        cos_angle = observations[:, 1]
+        sin_angle = observations[:, 2]
+
+        # Compute actual angle from cos and sin
+        angles = np.arctan2(sin_angle, cos_angle)
+
+        # Check if angle is within threshold (close to 0, which is upright)
+        is_straight = np.abs(angles) < threshold_angle
+
+        # Compute percentage of steps with pole straight
+        pct_straight = np.sum(is_straight) / len(is_straight) * 100
+        percentage_straight.append(pct_straight)
+
+        # Check for consecutive_steps consecutive True values
+        episode_success = False
+        count = 0
+        for straight in is_straight:
+            if straight:
+                count += 1
+                if count >= consecutive_steps:
+                    episode_success = True
+                    break
+            else:
+                count = 0
+
+        success.append(episode_success)
+    column_name = column_name if column_name is not None else 'success'
+    df_data[column_name] = np.array(success)
+    df_data['percentage_straight'] = np.array(percentage_straight)
+    return df_data
+
+
+def chunk_data(data, chunk_size=500):
+    return [data[i:i + chunk_size] for i in range(0, len(data), chunk_size)]
