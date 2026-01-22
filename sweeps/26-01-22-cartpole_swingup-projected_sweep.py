@@ -1,0 +1,275 @@
+"""
+Sweep for evaluating ProjectedTDMPC2 with different projection dimensions (k)
+across various initial conditions.
+
+This sweep:
+1. Loads pre-fitted projectors from disk
+2. Evaluates the projected agent across initial conditions
+3. Records episode data (observations, actions, rewards, latents) for analysis
+"""
+
+import sys
+import numpy as np
+from pathlib import Path
+from itertools import product
+
+sys.path.insert(0, "/home/hgf_hmgu/hgf_gib4562/tdmpc2/tdmpc2")
+
+from hydra import initialize, compose
+from omegaconf import OmegaConf
+from utils import run_episode_with_recording
+from common.episode_data_recorder import EpisodeDataRecorder
+from common.latent_projector import LatentProjector
+from common.seed import set_seed
+from common.parser import parse_cfg
+from envs import make_env
+from tdmpc2 import TDMPC2
+from projected_tdmpc2 import ProjectedTDMPC2
+from datetime import datetime
+import torch
+
+# ============================================================================
+# SWEEP CONFIGURATION
+# ============================================================================
+
+# Model checkpoint to use
+CHECKPOINT_PATH = Path(
+    'logs/model-runs/2025-12-20/19-10-12/cartpole_exp/models/500000.pt')
+
+# Directory containing pre-fitted projectors (projector_k{k}.pt files)
+PROJECTORS_DIR = Path('logs/projectors')
+
+# Projection dimensions to sweep over (must have corresponding projector files)
+K_VALUES = [4, 8, 16, 32, 64, 128, 256, 512]
+
+# Also run baseline (no projection) for comparison
+RUN_BASELINE = True
+
+# Base configuration
+override_cfg = dict(
+    task='cartpole-swingup',
+    checkpoint=str(CHECKPOINT_PATH),
+    obs='state',
+    seed=1,
+    compile=False,
+    mpc=True,
+    multitask=False,
+    model_size=5,
+    save_video=False,
+    record_planning=False,
+)
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Seeds for the sweep
+SEEDS = [1]
+
+# ============================================================================
+# GENERATE INITIAL STATES
+# ============================================================================
+
+# Define the ranges for each dimension
+cart_positions = [-1, 0, 1]
+angles_degrees = np.linspace(0, 360, 8)[:-1]
+angles_radians = np.deg2rad(angles_degrees)
+
+# Generate all combinations
+all_combinations = []
+for cart_pos, angle_radians in product(cart_positions, angles_radians):
+    all_combinations.append([cart_pos, angle_radians])
+
+# Convert to numpy array
+INITIAL_STATES = np.array(all_combinations)
+
+# Base directory for saving results
+BASE_SAVE_DIR = 'logs/26-01-22-cartpole_swingup-projected_sweep'
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+def load_projector(k: int) -> LatentProjector:
+    """Load a pre-fitted projector from disk."""
+    projector_path = PROJECTORS_DIR / f'projector_k{k}.pt'
+    if not projector_path.exists():
+        raise FileNotFoundError(
+            f"Projector not found: {projector_path}\n"
+            f"Please fit projectors first and save them to {PROJECTORS_DIR}")
+    return LatentProjector.load(str(projector_path), device=str(DEVICE))
+
+
+def setup_projected_agent(cfg, projector):
+    """
+    Initialize environment and projected agent.
+    
+    Args:
+        cfg: Configuration object
+        projector: LatentProjector instance
+        
+    Returns:
+        env: Environment instance
+        agent: ProjectedTDMPC2 agent instance
+    """
+    env = make_env(cfg)
+    agent = ProjectedTDMPC2(cfg, projector=projector)
+
+    if cfg.checkpoint and cfg.checkpoint != '???':
+        agent.load(cfg.checkpoint)
+    else:
+        raise ValueError("Must provide a checkpoint path")
+
+    return env, agent
+
+
+def setup_baseline_agent(cfg):
+    """
+    Initialize environment and baseline (non-projected) agent.
+    Uses RecordingTDMPC2 for compatibility with run_episode_with_recording.
+    """
+    from recording_tdmpc2 import RecordingTDMPC2
+
+    env = make_env(cfg)
+    agent = RecordingTDMPC2(cfg, planning_recorder=None)
+
+    if cfg.checkpoint and cfg.checkpoint != '???':
+        agent.load(cfg.checkpoint)
+    else:
+        raise ValueError("Must provide a checkpoint path")
+
+    return env, agent
+
+
+# ============================================================================
+# MAIN SWEEP
+# ============================================================================
+
+
+def main():
+    print("=" * 80)
+    print("PROJECTED TDMPC2 SWEEP")
+    print("=" * 80)
+    print(f"Task: {override_cfg['task']}")
+    print(f"Checkpoint: {CHECKPOINT_PATH}")
+    print(f"Projectors directory: {PROJECTORS_DIR}")
+    print(f"K values: {K_VALUES}")
+    print(f"Run baseline: {RUN_BASELINE}")
+    print(f"Total initial states: {len(INITIAL_STATES)}")
+    print(f"Seeds: {SEEDS}")
+    print(f"Base save directory: {BASE_SAVE_DIR}")
+    print("=" * 80)
+
+    # Verify checkpoint exists
+    if not CHECKPOINT_PATH.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {CHECKPOINT_PATH}")
+    print(f"✓ Found checkpoint: {CHECKPOINT_PATH}")
+
+    # Verify projectors exist
+    print("\nVerifying projectors...")
+    projectors = {}
+    for k in K_VALUES:
+        projectors[k] = load_projector(k)
+        print(f"  ✓ Loaded: projector_k{k}.pt")
+
+    # Initialize Hydra config
+    with initialize(config_path="../tdmpc2", version_base=None):
+        cfg = compose(config_name="config")
+        OmegaConf.set_struct(cfg, False)
+        cfg = OmegaConf.merge(cfg, override_cfg)
+
+    # Parse config
+    cfg = parse_cfg(cfg)
+
+    # Run sweep
+    print("\n" + "=" * 80)
+    print("RUNNING SWEEP")
+    print("=" * 80 + "\n")
+
+    # Determine what to sweep over
+    if RUN_BASELINE:
+        sweep_configs = [('baseline', None)] + [(f'k{k}', k) for k in K_VALUES]
+    else:
+        sweep_configs = [(f'k{k}', k) for k in K_VALUES]
+
+    total_episodes = len(sweep_configs) * len(INITIAL_STATES) * len(SEEDS)
+    episode_count = 0
+
+    for config_name, k_value in sweep_configs:
+        print("\n" + "=" * 80)
+        print(f"CONFIG: {config_name}")
+        print("=" * 80)
+
+        for seed in SEEDS:
+            for initial_state in INITIAL_STATES:
+                episode_count += 1
+                print(f"\n[Episode {episode_count}/{total_episodes}]")
+                print(f"  Config: {config_name}")
+                print(f"  Seed: {seed}, Initial state: {initial_state}")
+
+                # Set seed for this episode
+                set_seed(seed)
+
+                # Set initial state
+                cfg.initial_state = {
+                    'qpos': {
+                        'slider': initial_state[0],
+                        'hinge_1': initial_state[1],
+                    },
+                    'qvel': {
+                        'slider': 0.,
+                        'hinge_1': 0.,
+                    },
+                }
+
+                # Create environment and agent
+                if k_value is None:
+                    # Baseline: use RecordingTDMPC2
+                    env, agent = setup_baseline_agent(cfg)
+                else:
+                    # Projected agent
+                    env, agent = setup_projected_agent(cfg, projectors[k_value])
+
+                # Create episode-specific save directory
+                time = datetime.now().strftime("%Y%m%d_%H%M%S")
+                episode_dir = Path(BASE_SAVE_DIR) / config_name / time
+                activations_dir = episode_dir / 'activations'
+                activations_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create episode recorder
+                episode_recorder = EpisodeDataRecorder(
+                    cfg, save_dir=str(activations_dir))
+
+                # Run episode using the existing utility function
+                run_episode_with_recording(
+                    env=env,
+                    agent=agent,
+                    episode_recorder=episode_recorder,
+                    planning_recorder=None,
+                    save_video=cfg.save_video,
+                    eval_mode=True,
+                    task=None,
+                    task_name=cfg.task,
+                    episode_dir=str(episode_dir),
+                )
+
+                # Save episode data with metadata
+                metadata = {
+                    'seed': seed,
+                    'initial_state': initial_state.tolist(),
+                    'checkpoint': str(cfg.checkpoint),
+                    'task': cfg.task,
+                    'config': config_name,
+                    'k': k_value,
+                }
+                episode_recorder.save_episode(metadata=metadata)
+                print(f"  → Saved to: {activations_dir}")
+
+    print("\n" + "=" * 80)
+    print("SWEEP COMPLETE!")
+    print("=" * 80)
+    print(f"Total episodes run: {episode_count}")
+    print(f"Results saved to: {BASE_SAVE_DIR}")
+
+
+if __name__ == '__main__':
+    main()

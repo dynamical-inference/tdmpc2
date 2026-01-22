@@ -66,6 +66,17 @@ class EpisodeDataRecorder:
         }
         self.current_timestep = 0
 
+    def _to_numpy(self, x):
+        """Convert tensor or dict of tensors to numpy."""
+        if isinstance(x, dict):
+            return {
+                k: v.cpu().numpy() if torch.is_tensor(v) else v
+                for k, v in x.items()
+            }
+        elif torch.is_tensor(x):
+            return x.cpu().numpy()
+        return x
+
     def record_step(self, obs, action, reward, done, latent_state):
         """
 		Record data for a single timestep.
@@ -75,21 +86,15 @@ class EpisodeDataRecorder:
 			action: Action taken (tensor)
 			reward: Reward received (float or tensor)
 			done: Whether episode is done (bool)
-			latent_state: Latent state from encoder (tensor)
+			latent_state: Latent state from encoder (tensor or dict of tensors)
+		                  For ProjectedTDMPC2, this is a dict with keys:
+		                  'raw', 'projected', 'pca_components'
 		"""
         # Convert to numpy for storage
-        if isinstance(obs, dict):
-            obs_np = {
-                k: v.cpu().numpy() if torch.is_tensor(v) else v
-                for k, v in obs.items()
-            }
-        else:
-            obs_np = obs.cpu().numpy() if torch.is_tensor(obs) else obs
-
-        action_np = action.cpu().numpy() if torch.is_tensor(action) else action
+        obs_np = self._to_numpy(obs)
+        action_np = self._to_numpy(action)
         reward_np = float(reward)
-        latent_np = latent_state.cpu().numpy() if torch.is_tensor(
-            latent_state) else latent_state
+        latent_np = self._to_numpy(latent_state)
 
         # Store data
         self.episode_data['observations'].append(obs_np)

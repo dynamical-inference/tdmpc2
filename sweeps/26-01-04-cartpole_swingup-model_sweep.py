@@ -59,7 +59,7 @@ SEEDS = [1]
 
 # Define the ranges for each dimension
 cart_positions = [-1, 0, 1]
-angles_degrees = np.linspace(0, 360, 6)
+angles_degrees = np.linspace(0, 360, 8)[:-1]
 angles_radians = np.deg2rad(angles_degrees)
 
 # Generate all combinations
