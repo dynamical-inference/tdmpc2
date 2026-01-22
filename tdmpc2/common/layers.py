@@ -128,6 +128,22 @@ class NormedLinear(nn.Linear):
          f"act={self.act.__class__.__name__})"
 
 
+class LinearDynamics(nn.Module):
+    """
+	Linear dynamics model: z_{t+1} = A @ [z_t, a_t] + b
+	Uses NormedLinear with SimNorm for consistency with MLP dynamics output layer.
+	Architecture: Linear -> LayerNorm -> SimNorm
+	"""
+
+    def __init__(self, in_dim, out_dim, cfg):
+        super().__init__()
+        # Match the MLP dynamics output layer: NormedLinear with SimNorm activation
+        self.linear = NormedLinear(in_dim, out_dim, act=SimNorm(cfg))
+
+    def forward(self, x):
+        return self.linear(x)
+
+
 def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
     """
 	Basic building block of TD-MPC2.
