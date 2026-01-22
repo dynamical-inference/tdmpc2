@@ -20,11 +20,16 @@ class TDMPC2(torch.nn.Module):
         self.cfg = cfg
         self.device = torch.device('cuda:0')
         self.model = WorldModel(cfg).to(self.device)
+        # Dynamics params: exclude if random_dynamics is enabled (frozen)
+        dynamics_params = [] if getattr(cfg, 'random_dynamics',
+                                        False) else list(
+                                            self.model._dynamics.parameters())
+
         self.optim = torch.optim.Adam([{
             'params': self.model._encoder.parameters(),
             'lr': self.cfg.lr * self.cfg.enc_lr_scale
         }, {
-            'params': self.model._dynamics.parameters()
+            'params': dynamics_params
         }, {
             'params': self.model._reward.parameters()
         }, {
