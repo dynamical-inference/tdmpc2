@@ -6,18 +6,20 @@ where μ is the mean and Uk are orthonormal directions found via:
   - PCA (unsupervised): directions of maximum variance
   - CCA (supervised): directions maximally correlated with state
   - RRR (supervised): ridge regression directions predictive of state
-  - hybrid_cca/hybrid_rrr: k_supervised supervised directions + (k - k_supervised)
+  - OLS (supervised): OLS regression directions predictive of state
+  - hybrid_*: k_supervised supervised directions + (k - k_supervised)
     PCA directions from the residual space orthogonal to supervised subspace
+
+All tensors are stored on CPU.
 """
 
 import torch
-import numpy as np
 from typing import Literal, Optional
 
 
 class LatentProjector:
     """
-    Low-rank projection for latent space.
+    Low-rank projection for latent space (CPU only).
     
     Projects latent vectors onto a k-dimensional subspace:
         Pk(z) = μ + Uk @ Uk.T @ (z - μ)
@@ -26,8 +28,12 @@ class LatentProjector:
         - 'pca': Unsupervised, directions of maximum variance
         - 'cca': Supervised, directions maximally correlated with state
         - 'rrr': Supervised, ridge regression directions predictive of state
+        - 'ols': Supervised, OLS regression directions predictive of state
         - 'hybrid_cca': k_supervised CCA directions + (k - k_supervised) residual PCA
         - 'hybrid_rrr': k_supervised RRR directions + (k - k_supervised) residual PCA
+        - 'hybrid_ols': k_supervised OLS directions + (k - k_supervised) residual PCA
+    
+    All inputs must be torch tensors. Everything stays on CPU.
     
     Example (unsupervised):
         projector = LatentProjector.fit(latents, k=32, method='pca')
@@ -39,28 +45,28 @@ class LatentProjector:
         
     Example (hybrid):
         projector = LatentProjector.fit(
-            latents, k=32, method='hybrid_cca',
-            states=states, k_supervised=5, ridge=1e-4
+            latents, k=32, method='hybrid_ols',
+            states=states, k_supervised=5
         )
     """
 
     def __init__(self,
-                 mean,
-                 components,
-                 method='pca',
-                 state_mean=None,
-                 state_std=None,
-                 device='cuda:0'):
+                 mean: torch.Tensor,
+                 components: torch.Tensor,
+                 method: str = 'pca',
+                 state_mean: Optional[torch.Tensor] = None,
+                 state_std: Optional[torch.Tensor] = None,
+                 device: str = 'cuda'):
         """
         Initialize projector with pre-computed mean and components.
         
         Args:
             mean: Mean of training latents, shape (latent_dim,)
             components: Orthonormal directions, shape (latent_dim, k)
-            method: Fitting method used ('pca', 'cca', 'rrr')
+            method: Fitting method used
             state_mean: Mean of states (for supervised methods)
             state_std: Std of states (for supervised methods)
-            device: Device to store tensors on
+            device: Device to store tensors on for projection (default: cuda)
         """
         self.device = torch.device(device)
         self.mean = mean.to(self.device)
@@ -77,24 +83,35 @@ class LatentProjector:
             self.state_mean = None
             self.state_std = None
 
-    def __call__(self, z):
+    def to(self, device: str):
+        """Move projector to a different device."""
+        self.device = torch.device(device)
+        self.mean = self.mean.to(self.device)
+        self.Uk = self.Uk.to(self.device)
+        if self.state_mean is not None:
+            self.state_mean = self.state_mean.to(self.device)
+            self.state_std = self.state_std.to(self.device)
+        return self
+
+    def __call__(self, z: torch.Tensor) -> torch.Tensor:
         """Apply projection. Alias for project()."""
         return self.project(z)
 
-    def project(self, z, U=None):
+    def project(self,
+                z: torch.Tensor,
+                U: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Project z onto the low-rank subspace.
         
         Pk(z) = μ + Uk @ Uk.T @ (z - μ)
         """
-
         if U is None:
             U = self.Uk
         z_centered = z - self.mean
         z_proj = (z_centered @ U) @ U.T
         return self.mean + z_proj
 
-    def get_components(self, z):
+    def get_components(self, z: torch.Tensor) -> torch.Tensor:
         """
         Get the k-dimensional coordinates of z in the subspace.
         
@@ -103,7 +120,7 @@ class LatentProjector:
         z_centered = z - self.mean
         return z_centered @ self.Uk
 
-    def project_and_components(self, z):
+    def project_and_components(self, z: torch.Tensor):
         """
         Project z and return both projected latent and k-dim components.
         
@@ -121,37 +138,42 @@ class LatentProjector:
 
     @classmethod
     def fit(cls,
-            latents,
+            latents: torch.Tensor,
             k: int,
-            method: Literal['pca', 'cca', 'rrr', 'hybrid_cca',
-                            'hybrid_rrr'] = 'pca',
-            states: Optional[np.ndarray] = None,
+            method: Literal['pca', 'cca', 'rrr', 'ols', 'hybrid_cca',
+                            'hybrid_rrr', 'hybrid_ols'] = 'pca',
+            states: Optional[torch.Tensor] = None,
             k_supervised: Optional[int] = None,
             ridge: float = 1e-4,
-            device: str = 'cuda:0'):
+            device: str = 'cuda'):
         """
         Fit projection from latents (and optionally states).
         
+        Fitting is done on CPU for stability, then the projector is moved to device.
+        
         Args:
-            latents: Training latents, shape (N, latent_dim)
+            latents: Training latents, shape (N, latent_dim). Must be torch tensor.
             k: Total number of components
             method: Fitting method:
                 - 'pca': unsupervised PCA
                 - 'cca': supervised CCA (max k = state_dim)
                 - 'rrr': supervised ridge reduced rank regression (max k = state_dim)
+                - 'ols': supervised OLS regression (max k = state_dim)
                 - 'hybrid_cca': k_supervised CCA + (k - k_supervised) residual PCA
                 - 'hybrid_rrr': k_supervised RRR + (k - k_supervised) residual PCA
+                - 'hybrid_ols': k_supervised OLS + (k - k_supervised) residual PCA
             states: Training states, shape (N, state_dim). Required for supervised.
             k_supervised: Number of supervised directions (for hybrid methods).
                           Defaults to state_dim if not specified.
-            ridge: Ridge regularization (for supervised methods)
-            device: Device for the projector
+            ridge: Ridge regularization (for cca/rrr)
+            device: Device to store projector on after fitting (default: cuda)
             
         Returns:
             LatentProjector instance
         """
-        if isinstance(latents, np.ndarray):
-            latents = torch.from_numpy(latents).float()
+        # Clone and detach to avoid shared memory/gradient issues
+        # Fitting always happens on CPU for stability
+        latents = latents.detach().clone().float().cpu()
 
         z_mean = latents.mean(dim=0)
         Z = latents - z_mean
@@ -160,11 +182,10 @@ class LatentProjector:
             Uk, info = cls._fit_pca(Z, k)
             return cls(z_mean, Uk, method='pca', device=device)
 
-        elif method in ('cca', 'rrr'):
+        elif method in ('cca', 'rrr', 'ols'):
             if states is None:
                 raise ValueError(f"method='{method}' requires states argument")
-            if isinstance(states, np.ndarray):
-                states = torch.from_numpy(states).float()
+            states = states.detach().clone().float().cpu()
 
             s_mean = states.mean(dim=0)
             s_std = states.std(dim=0) + 1e-8
@@ -172,8 +193,10 @@ class LatentProjector:
 
             if method == 'cca':
                 Uk, info = cls._fit_cca(Z, S, k, ridge)
-            else:
+            elif method == 'rrr':
                 Uk, info = cls._fit_rrr(Z, S, k, ridge)
+            else:  # ols
+                Uk, info = cls._fit_ols(Z, S, k)
 
             return cls(z_mean,
                        Uk,
@@ -182,11 +205,10 @@ class LatentProjector:
                        state_std=s_std,
                        device=device)
 
-        elif method in ('hybrid_cca', 'hybrid_rrr'):
+        elif method in ('hybrid_cca', 'hybrid_rrr', 'hybrid_ols'):
             if states is None:
                 raise ValueError(f"method='{method}' requires states argument")
-            if isinstance(states, np.ndarray):
-                states = torch.from_numpy(states).float()
+            states = states.detach().clone().float().cpu()
 
             s_mean = states.mean(dim=0)
             s_std = states.std(dim=0) + 1e-8
@@ -199,7 +221,12 @@ class LatentProjector:
             k_supervised = min(k_supervised, state_dim, k)
 
             # Get supervised method type
-            supervised_method = 'cca' if method == 'hybrid_cca' else 'rrr'
+            if method == 'hybrid_cca':
+                supervised_method = 'cca'
+            elif method == 'hybrid_rrr':
+                supervised_method = 'rrr'
+            else:
+                supervised_method = 'ols'
             Uk, info = cls._fit_hybrid(Z, S, k, k_supervised, supervised_method,
                                        ridge)
 
@@ -214,7 +241,7 @@ class LatentProjector:
             raise ValueError(f"Unknown method: {method}")
 
     @staticmethod
-    def _fit_pca(Z, k):
+    def _fit_pca(Z: torch.Tensor, k: int):
         """
         PCA: find directions of maximum variance.
         
@@ -227,7 +254,7 @@ class LatentProjector:
             info: dict with fitting info
         """
         U, S, Vh = torch.linalg.svd(Z, full_matrices=False)
-        Uk = Vh[:k].T
+        Uk = Vh[:k].T.clone()
 
         total_var = (S**2).sum()
         explained_var = (S[:k]**2).sum() / total_var
@@ -237,11 +264,11 @@ class LatentProjector:
 
         return Uk, {
             'explained_var': explained_var.item(),
-            'singular_values': S[:k]
+            'singular_values': S[:k].clone()
         }
 
     @staticmethod
-    def _fit_cca(Z, S, k, ridge):
+    def _fit_cca(Z: torch.Tensor, S: torch.Tensor, k: int, ridge: float):
         """
         CCA: find directions maximally correlated with states.
         
@@ -287,7 +314,7 @@ class LatentProjector:
         return Uk, {'canonical_correlations': canonical_corr[:k]}
 
     @staticmethod
-    def _fit_rrr(Z, S, k, ridge):
+    def _fit_rrr(Z: torch.Tensor, S: torch.Tensor, k: int, ridge: float):
         """
         Ridge Reduced Rank Regression: ridge regression + orthonormal basis.
         
@@ -322,12 +349,61 @@ class LatentProjector:
 
         return Uk, {'singular_values': singular_values[:k]}
 
+    @staticmethod
+    def _fit_ols(Z: torch.Tensor, S: torch.Tensor, k: int):
+        """
+        Simple OLS regression: orthonormal basis of regression weights.
+        
+        Computes W via normal equations: W = (Z'Z)^{-1} Z'S
+        Then extracts orthonormal basis for the column space of W.
+        
+        Uses normal equations instead of lstsq for determinism and numerical
+        stability (torch.linalg.lstsq can be non-deterministic and suboptimal).
+        
+        Args:
+            Z: Centered latents (N, latent_dim)
+            S: Standardized states (N, state_dim)
+            k: Number of components (capped at state_dim)
+            
+        Returns:
+            Uk: shape (latent_dim, k)
+            info: dict with fitting info
+        """
+        latent_dim = Z.shape[1]
+        k = min(k, S.shape[1])
+
+        # OLS via normal equations: W = (Z'Z + εI)^{-1} Z'S
+        # Tiny ε for numerical stability (effectively pure OLS)
+        ZtZ = Z.T @ Z + 1e-10 * torch.eye(latent_dim)
+        ZtS = Z.T @ S
+        W = torch.linalg.solve(ZtZ, ZtS)  # (latent_dim, state_dim)
+
+        # Extract orthonormal basis for column space of W
+        U, singular_values, Vh = torch.linalg.svd(W, full_matrices=False)
+        Uk = U[:, :k]
+        Uk, _ = torch.linalg.qr(Uk)
+
+        # Compute R² for each state dimension
+        S_pred = Z @ W
+        ss_res = ((S - S_pred)**2).sum(dim=0)
+        ss_tot = ((S - S.mean(dim=0))**2).sum(dim=0)
+        r2_per_dim = (1 - ss_res / ss_tot).tolist()
+
+        print(f"LatentProjector.fit (ols): k={k}, "
+              f"R²_per_dim={[f'{r:.4f}' for r in r2_per_dim]}")
+
+        return Uk, {
+            'singular_values': singular_values[:k],
+            'r2_per_dim': r2_per_dim
+        }
+
     @classmethod
-    def _fit_hybrid(cls, Z, S, k, k_supervised, supervised_method, ridge):
+    def _fit_hybrid(cls, Z: torch.Tensor, S: torch.Tensor, k: int,
+                    k_supervised: int, supervised_method: str, ridge: float):
         """
         Hybrid: supervised directions + residual PCA completion.
         
-        1. Find k_supervised supervised directions (CCA or RRR)
+        1. Find k_supervised supervised directions (CCA, RRR, or OLS)
         2. Project Z onto the orthogonal complement of the supervised subspace
         3. Find (k - k_supervised) PCA directions in the residual space
         4. Concatenate to form the full k-dimensional basis
@@ -337,8 +413,8 @@ class LatentProjector:
             S: Standardized states (N, state_dim)
             k: Total number of components
             k_supervised: Number of supervised directions
-            supervised_method: 'cca' or 'rrr'
-            ridge: Ridge regularization
+            supervised_method: 'cca', 'rrr', or 'ols'
+            ridge: Ridge regularization (not used for 'ols')
             
         Returns:
             Uk: shape (latent_dim, k)
@@ -347,32 +423,31 @@ class LatentProjector:
         # Step 1: Get supervised directions
         if supervised_method == 'cca':
             U_sup, sup_info = cls._fit_cca(Z, S, k_supervised, ridge)
-        else:
+        elif supervised_method == 'rrr':
             U_sup, sup_info = cls._fit_rrr(Z, S, k_supervised, ridge)
+        else:  # ols
+            U_sup, sup_info = cls._fit_ols(Z, S, k_supervised)
 
         k_residual = k - k_supervised
         if k_residual <= 0:
-            # No residual PCA needed
             print(f"LatentProjector.fit (hybrid_{supervised_method}): "
                   f"k_supervised={k_supervised}, k_residual=0")
             return U_sup, sup_info
 
         # Step 2: Project Z onto orthogonal complement of supervised subspace
-        # Z_residual = Z - Z @ U_sup @ U_sup.T
         Z_proj_sup = Z @ U_sup @ U_sup.T
         Z_residual = Z - Z_proj_sup
 
         # Step 3: PCA on residual
         U_res, S_res, Vh_res = torch.linalg.svd(Z_residual, full_matrices=False)
-        U_pca_residual = Vh_res[:k_residual].T  # (latent_dim, k_residual)
+        U_pca_residual = Vh_res[:k_residual].T.clone()
 
         # Step 4: Ensure orthogonality to supervised directions
-        # Gram-Schmidt orthogonalization against U_sup
         U_pca_orth = U_pca_residual - U_sup @ (U_sup.T @ U_pca_residual)
         U_pca_orth, _ = torch.linalg.qr(U_pca_orth)
 
         # Step 5: Concatenate
-        Uk = torch.cat([U_sup, U_pca_orth], dim=1)
+        Uk = torch.cat([U_sup.clone(), U_pca_orth], dim=1)
 
         # Compute residual explained variance
         total_var = (S_res**2).sum()
@@ -394,11 +469,8 @@ class LatentProjector:
     # Evaluation methods
     # =========================================================================
 
-    def explained_variance_ratio(self, latents):
+    def explained_variance_ratio(self, latents: torch.Tensor) -> float:
         """Fraction of latent variance explained by the k-dimensional subspace."""
-        if isinstance(latents, np.ndarray):
-            latents = torch.from_numpy(latents).float().to(self.device)
-
         centered = latents - self.mean
         total_var = (centered**2).sum()
 
@@ -408,17 +480,13 @@ class LatentProjector:
 
         return (1.0 - residual_var / total_var).item()
 
-    def state_prediction_r2(self, latents, states):
+    def state_prediction_r2(self, latents: torch.Tensor,
+                            states: torch.Tensor) -> float:
         """
         R² for predicting states from the projected subspace (supervised methods).
         
         Fits a linear decoder from k-dim components to states and returns R².
         """
-        if isinstance(latents, np.ndarray):
-            latents = torch.from_numpy(latents).float().to(self.device)
-        if isinstance(states, np.ndarray):
-            states = torch.from_numpy(states).float().to(self.device)
-
         components = self.get_components(latents)
 
         # Standardize states if we have normalization
@@ -444,8 +512,8 @@ class LatentProjector:
     # Persistence
     # =========================================================================
 
-    def save(self, path):
-        """Save projector to disk."""
+    def save(self, path: str):
+        """Save projector to disk (always saves to CPU)."""
         data = {
             'mean': self.mean.cpu(),
             'Uk': self.Uk.cpu(),
@@ -460,7 +528,7 @@ class LatentProjector:
         print(f"LatentProjector ({self.method}) saved to {path}")
 
     @classmethod
-    def load(cls, path, device='cuda:0'):
+    def load(cls, path: str, device: str = 'cuda'):
         """Load projector from disk."""
         data = torch.load(path, map_location='cpu', weights_only=True)
         projector = cls(mean=data['mean'],
@@ -470,7 +538,8 @@ class LatentProjector:
                         state_std=data.get('state_std'),
                         device=device)
         print(f"LatentProjector loaded: method={projector.method}, "
-              f"k={projector.k}, latent_dim={projector.latent_dim}")
+              f"k={projector.k}, latent_dim={projector.latent_dim}, "
+              f"device={projector.device}")
         return projector
 
     def __repr__(self):
