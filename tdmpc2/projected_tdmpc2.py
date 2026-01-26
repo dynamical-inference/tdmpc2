@@ -71,6 +71,17 @@ class ProjectedTDMPC2(TDMPC2):
         """Always apply projection using the provided projector."""
         return self.projector(z)
 
+    def encode(self, obs, task=None):
+        """
+        Encode observation and apply projection.
+        """
+        obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
+        if task is not None:
+            task = torch.tensor([task], device=self.device)
+        z_proj, _ = self.projector.project_and_components(
+            self.model.encode(obs, task))
+        return z_proj.squeeze(0)
+
     @torch.no_grad()
     def act(self, obs, t0=False, eval_mode=False, task=None):
         """
