@@ -259,7 +259,7 @@ def evaluate_lags_leave_k_out(x_eps,
         'model_by_lag': model_by_lag,
     }
 
-    print(results)
+    print(results['test_r2_mean'])
 
     if add_bootstrap_ci:
         results['train_r2_ci'] = {
