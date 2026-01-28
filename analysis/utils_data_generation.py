@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from tqdm import tqdm
+import math
 
 
 def wrap_pi(angle):
@@ -276,3 +277,31 @@ def run_env_autonomous(env, initial_state, n_steps=100, is_rgb=False):
         return np.array(obs_pixel_list), np.array(obs_list)
     else:
         return np.array(obs_list)
+
+
+def sample_uniform_obs(n,
+                       return_as_state=False,
+                       positions=[-1, 1],
+                       angles=[0, 2 * math.pi],
+                       velocities=[-2.5, 2.5],
+                       angular_velocities=[-7.5, 7.5],
+                       seed=0):
+    rng = np.random.default_rng(seed)
+    bounds = np.array([
+        positions,
+        angles,
+        velocities,
+        angular_velocities,
+    ])
+    obs = rng.uniform(bounds[:, 0], bounds[:, 1], size=(n, bounds.shape[0]))
+
+    if return_as_state:
+        obs_uniform = np.zeros((n, 5))
+        obs_uniform[:, 0] = obs[:, 0]
+        obs_uniform[:, 1] = np.cos(obs[:, 1])
+        obs_uniform[:, 2] = np.sin(obs[:, 1])
+        obs_uniform[:, 3] = obs[:, 2]
+        obs_uniform[:, 4] = obs[:, 3]
+        return obs_uniform
+    else:
+        return obs
