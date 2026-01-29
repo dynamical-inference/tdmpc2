@@ -255,6 +255,8 @@ def run_env_autonomous(env, initial_state, n_steps=100, is_rgb=False):
 
     obs_pixel_list = []
     obs_list = []
+    actions_list = []
+    rewards_list = []
     if is_rgb:
         obs_pixel = env.reset(initial_state=initial_state)
         obs = env.get_state_obs()
@@ -263,7 +265,8 @@ def run_env_autonomous(env, initial_state, n_steps=100, is_rgb=False):
     else:
         obs = env.reset(initial_state=initial_state)
         obs_list.append(obs)
-
+        actions_list.append(torch.tensor([0.0]))
+        rewards_list.append(0.0)
     for _ in range(n_steps - 1):
         next_obs, reward, done, info = env.step(torch.tensor([0.0]))
 
@@ -273,27 +276,83 @@ def run_env_autonomous(env, initial_state, n_steps=100, is_rgb=False):
         else:
             obs_list.append(next_obs)
 
+        actions_list.append(torch.tensor([0.0]))
+        rewards_list.append(reward)
     if is_rgb:
-        return np.array(obs_pixel_list), np.array(obs_list)
+        return np.array(obs_pixel_list), np.array(obs_list), np.array(
+            actions_list), np.array(rewards_list)
     else:
-        return np.array(obs_list)
+        return np.array(obs_list), np.array(actions_list), np.array(
+            rewards_list)
 
 
-def sample_uniform_obs(n,
-                       return_as_state=False,
-                       positions=[-1, 1],
-                       angles=[0, 2 * math.pi],
-                       velocities=[-2.5, 2.5],
-                       angular_velocities=[-7.5, 7.5],
-                       seed=0):
+def sample_uniform_obs(
+        n,
+        return_as_state=False,
+        position_bounds=[-1, 1],
+        angle_bounds=[0, 2 * math.pi],
+        cart_velocity_bounds=[-2.5, 2.5],
+        angular_velocity_bounds=[-5, 5],
+        sample_cart_velocity_normal=False,
+        cart_velocity_normal_params=None,  # (mean, std) required if sample_cart_velocity_normal
+        sample_angular_velocity_normal=False,
+        angular_velocity_params=None,  # (mean, std) required if sample_angular_velocity_normal
+        seed=0):
+    """
+    Sample observations. By default all variables are sampled uniformly.
+    If sample_vchange_normal or sample_angular_velocity_normal is True,
+    you MUST pass the corresponding parameters (mean, std).
+
+    Args:
+        n: Number of samples.
+        return_as_state: If True, converts to state representation.
+        positions, angles: Uniform sampling bounds (list-like).
+        vchange_bounds: Uniform bounds for vchange if not sampling normal.
+        angular_velocities_bounds: Uniform bounds for angular velocity if not sampling normal.
+        sample_vchange_normal: Whether to use normal distribution for vchange.
+        vchange_params: Tuple (mean, std) if sample_vchange_normal=True. Required.
+        sample_angular_velocity_normal: Whether to use normal for angular velocity.
+        angular_velocities_params: Tuple (mean, std) if sample_angular_velocity_normal=True. Required.
+        seed: RNG seed.
+
+    Returns:
+        obs or obs_uniform
+    """
     rng = np.random.default_rng(seed)
-    bounds = np.array([
-        positions,
-        angles,
-        velocities,
-        angular_velocities,
-    ])
-    obs = rng.uniform(bounds[:, 0], bounds[:, 1], size=(n, bounds.shape[0]))
+    obs = np.zeros((n, 4))  # shape (n_samples, 4 features)
+
+    # Position
+    obs[:, 0] = rng.uniform(position_bounds[0], position_bounds[1], size=n)
+
+    # Angle
+    obs[:, 1] = rng.uniform(angle_bounds[0], angle_bounds[1], size=n)
+
+    # vchange (cart velocity)
+    if sample_cart_velocity_normal:
+        if cart_velocity_normal_params is None or len(
+                cart_velocity_normal_params) != 2:
+            raise ValueError(
+                "If sample_cart_velocity_normal is True, cart_velocity_normal_params (mean, std) must be provided."
+            )
+        mean, std = cart_velocity_normal_params
+        obs[:, 2] = rng.normal(mean, std, size=n)
+    else:
+        obs[:, 2] = rng.uniform(cart_velocity_bounds[0],
+                                cart_velocity_bounds[1],
+                                size=n)
+
+    # Angular velocity
+    if sample_angular_velocity_normal:
+        if angular_velocity_params is None or len(angular_velocity_params) != 2:
+            raise ValueError(
+                "If sample_angular_velocity_normal is True, angular_velocity_params (mean, std) must be provided."
+            )
+        mean, std = angular_velocity_params
+        obs[:, 3] = rng.normal(mean, std, size=n)
+    else:
+        obs[:, 3] = rng.uniform(angular_velocity_bounds[0],
+                                angular_velocity_bounds[1],
+                                size=n)
 
     if return_as_state:
         obs_uniform = np.zeros((n, 5))
