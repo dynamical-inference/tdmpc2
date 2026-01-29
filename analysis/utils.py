@@ -268,6 +268,8 @@ def reconstruct_cartpole_dmcontrol(states,
     if save_video:
         assert out_path is not None, "out_path must be provided if save_video is True"
 
+    assert states.shape[
+        1] == 5, "States must have 5 dimensions: [x, cos(th), sin(th), dx, dth]"
     env = suite.load("cartpole", "swingup")
     pole_angle_radians = np.arctan2(states[:, 2], states[:, 1]).reshape(-1, 1)
     states_radians = np.concatenate([
