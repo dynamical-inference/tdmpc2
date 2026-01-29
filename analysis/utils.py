@@ -321,6 +321,53 @@ def reconstruct_cartpole_dmcontrol(states,
         return
 
 
+def show_video_from_frames(frames, fps=30, save_to_file=None, show=True):
+    """
+    Write frames (numpy array of shape (N, height, width, 3)) to a video file
+    and display it inline in a Jupyter notebook, optionally saving to a specified file.
+
+    Args:
+        frames: numpy array or list of frames (N, H, W, 3)
+        fps: frames per second for video
+        save_to_file: (str or None) if not None, save video file to this path
+        show: (bool) whether to display video inline in notebook
+
+    Returns:
+        The video file path (str).
+    """
+    import os
+    import tempfile
+    import imageio
+
+    video_path = save_to_file
+
+    # Convert frames from np.ndarray (N, H, W, 3) to a list of frames if necessary
+    if hasattr(frames, "shape") and len(frames.shape) == 4:
+        print(f"Frames shape: {frames.shape}")
+        frames_to_write = [frame for frame in frames]
+    else:
+        frames_to_write = frames
+
+    if video_path is None:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            video_path = tmp.name
+
+    imageio.mimwrite(video_path,
+                     frames_to_write,
+                     fps=fps,
+                     macro_block_size=None)
+    print(f"Video file saved at: {os.path.abspath(video_path)}")
+
+    if show:
+        try:
+            from IPython.display import Video, display
+            display(Video(video_path, embed=True))
+        except ImportError:
+            print("IPython.display not available. Cannot display inline video.")
+
+    return video_path
+
+
 def load_data(
     df_metadata,
     cart_position=None,
