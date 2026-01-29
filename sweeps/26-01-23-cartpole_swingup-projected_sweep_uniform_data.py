@@ -42,7 +42,7 @@ PROJECTORS_DIR = Path(
     'sweeps/sweep_data/26-01-23-cartpole_swingup-projected_sweep_uniform_data')
 
 # Also run baseline (no projection) for comparison
-RUN_BASELINE = True
+RUN_BASELINE = False
 
 # Base configuration
 override_cfg = dict(
@@ -79,49 +79,49 @@ def get_projector_configs():
     """
     configs = []
 
-    # # PCA projectors: k = 8, 9, 10, 11, 12, 13, 14, 15
-    # for k in [8, 9, 10, 11, 12, 13, 14, 15]:
-    #     configs.append({
-    #         'name': f'pca_k{k}',
-    #         'path': PROJECTORS_DIR / f'pca_projector_k{k}.pt',
-    #         'type': 'linear',
-    #         'method': 'pca',
-    #         'k': k,
-    #     })
+    # PCA projectors: k = 8, 9, 10, 11, 12, 13, 14, 15
+    for k in [8, 9, 10, 11, 12, 13, 14, 15]:
+        configs.append({
+            'name': f'pca_k{k}',
+            'path': PROJECTORS_DIR / f'pca_projector_k{k}.pt',
+            'type': 'linear',
+            'method': 'pca',
+            'k': k,
+        })
 
-    # # Hybrid OLS projectors: k_unsupervised = 4-10, k_supervised = 5
-    # k_supervised = 5
-    # for k_unsupervised in [9, 10, 15]:  # 5, 6, 7, 8,
-    #     k_total = k_unsupervised + k_supervised
-    #     configs.append({
-    #         'name':
-    #             f'hybrid_ols_k{k_total}_ksup{k_supervised}',
-    #         'path':
-    #             PROJECTORS_DIR /
-    #             f'hybrid_ols_projector_k{k_unsupervised}_k_supervised{k_supervised}.pt',
-    #         'type':
-    #             'linear',
-    #         'method':
-    #             'hybrid_ols',
-    #         'k':
-    #             k_total,
-    #         'k_supervised':
-    #             k_supervised,
-    #         'k_unsupervised':
-    #             k_unsupervised,
-    #     })
+    # Hybrid OLS projectors: k_unsupervised = 4-10, k_supervised = 5
+    k_supervised = 5
+    for k_unsupervised in [9, 10, 15]:  # 5, 6, 7, 8,
+        k_total = k_unsupervised + k_supervised
+        configs.append({
+            'name':
+                f'hybrid_ols_k{k_total}_ksup{k_supervised}',
+            'path':
+                PROJECTORS_DIR /
+                f'hybrid_ols_projector_k{k_unsupervised}_k_supervised{k_supervised}.pt',
+            'type':
+                'linear',
+            'method':
+                'hybrid_ols',
+            'k':
+                k_total,
+            'k_supervised':
+                k_supervised,
+            'k_unsupervised':
+                k_unsupervised,
+        })
 
-    # # CCA projector: k = 5
-    # configs.append({
-    #     'name': 'cca_k5',
-    #     'path': PROJECTORS_DIR / 'cca_projector_k5.pt',
-    #     'type': 'linear',
-    #     'method': 'cca',
-    #     'k': 5,
-    # })
+    # CCA projector: k = 5
+    configs.append({
+        'name': 'cca_k5',
+        'path': PROJECTORS_DIR / 'cca_projector_k5.pt',
+        'type': 'linear',
+        'method': 'cca',
+        'k': 5,
+    })
 
     # Nonlinear projectors: k = 3, 4, 5, 6, 7, 8, 10, 15
-    for k in [1, 2]:  #[3, 4, 5, 6, 7, 8, 10, 15]:
+    for k in [1, 2, 3, 4, 5, 6, 7, 8, 10, 15]:
         configs.append({
             'name': f'nonlinear_k{k}',
             'path': PROJECTORS_DIR / f'nonlinear_projector_k{k}.pt',
@@ -130,6 +130,20 @@ def get_projector_configs():
             'k': k,
         })
 
+    for k in [2, 3, 4, 10]:
+        configs.append({
+            'name':
+                f'state_supervised_nonlinear_k{k}',
+            'path':
+                PROJECTORS_DIR /
+                f'state_supervised_nonlinear_projector_k{k}.pt',
+            'type':
+                'nonlinear',
+            'method':
+                'nonlinear',
+            'k':
+                k,
+        })
     return configs
 
 
