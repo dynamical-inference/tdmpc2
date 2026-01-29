@@ -1,9 +1,9 @@
 """
-Sweep for evaluating ProjectedTDMPC2 with different projection dimensions (k)
+Sweep for evaluating ProjectedTDMPC2 with different projection methods and dimensions
 across various initial conditions.
 
 This sweep:
-1. Loads pre-fitted projectors from disk
+1. Loads pre-fitted projectors from disk (PCA, hybrid OLS, CCA, nonlinear)
 2. Evaluates the projected agent across initial conditions
 3. Records episode data (observations, actions, rewards, latents) for analysis
 """
@@ -20,6 +20,7 @@ from omegaconf import OmegaConf
 from utils import run_episode_with_recording
 from common.episode_data_recorder import EpisodeDataRecorder
 from common.latent_projector import LatentProjector
+from common.nonlinear_latent_projector import NonlinearLatentProjector
 from common.seed import set_seed
 from common.parser import parse_cfg
 from envs import make_env
@@ -34,43 +35,103 @@ import torch
 
 # Model checkpoint to use
 CHECKPOINT_PATH = Path(
-    'logs/model-runs/2025-12-20/19-10-12/cartpole_exp/models/500000.pt')
+    "/home/hgf_hmgu/hgf_gib4562/tdmpc2/tdmpc2/outputs/2026-01-15/21-56-52/cartpole_exp_pixel/models/650000.pt"
+)
 
-# Directory containing pre-fitted projectors (projector_k{k}.pt files)
-PROJECTORS_DIR = Path('logs/projectors')
-
-# Projection dimensions to sweep over (must have corresponding projector files)
-K_VALUES = [4, 8, 16, 32, 64, 128, 256, 512]
+# Directory containing pre-fitted projectors
+PROJECTORS_DIR = Path(
+    'sweeps/sweep_data/26-01-23-cartpole_swingup-projected_sweep_uniform_data')
 
 # Also run baseline (no projection) for comparison
 RUN_BASELINE = True
 
-# Base configuration
+# Base configuration (checkpoint will be set from MODEL_PATH)
 override_cfg = dict(
-    task='cartpole-swingup',
-    checkpoint=str(CHECKPOINT_PATH),
-    obs='state',
+    task='cartpole-swingup',  # Must match checkpoint task
+    checkpoint=CHECKPOINT_PATH,  # Will be set from MODEL_PATH
+    obs='rgb',  # Pixel observations
     seed=1,
     compile=False,
     mpc=True,
     multitask=False,
-    model_size=5,
-    save_video=False,
-    record_planning=False,
+    model_size=5,  # Adjust if the checkpoint was trained with a different size
+    save_video=True,  # NOTE (R): for debugging purposes
+    record_planning=False,  # Focus on episode data
 )
-
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Seeds for the sweep
 SEEDS = [1]
 
 # ============================================================================
+# PROJECTOR CONFIGURATIONS
+# ============================================================================
+
+
+def get_projector_configs():
+    """
+    Define all projector configurations to sweep over.
+    
+    Returns list of dicts with:
+        - name: Human-readable name for the config
+        - path: Path to the projector file
+        - type: 'linear' or 'nonlinear'
+    """
+    configs = []
+
+    # PCA projectors
+    for k in [10, 75, 100, 150]:
+        configs.append({
+            'name': f'pca_k{k}',
+            'path': PROJECTORS_DIR / f'pixelv2_pca_projector_k{k}.pt',
+            'type': 'linear',
+            'method': 'pca',
+            'k': k,
+        })
+
+    # # CCA projector: k = 5
+    # configs.append({
+    #     'name': 'cca_k5',
+    #     'path': PROJECTORS_DIR / 'pixel_cca_projector_k5.pt',
+    #     'type': 'linear',
+    #     'method': 'cca',
+    #     'k': 5,
+    # })
+
+    # Nonlinear projectors: k = 3, 4, 5, 6, 7, 8, 10, 15
+    for k in [5, 10, 30, 150]:
+        configs.append({
+            'name': f'nonlinear_k{k}',
+            'path': PROJECTORS_DIR / f'pixelv2_nonlinear_projector_k{k}.pt',
+            'type': 'nonlinear',
+            'method': 'nonlinear',
+            'k': k,
+        })
+
+    return configs
+
+
+def load_projector(config):
+    """Load a projector from disk based on config."""
+    path = config['path']
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Projector not found: {path}\n"
+            f"Please fit projectors first and save them to {PROJECTORS_DIR}")
+
+    if config['type'] == 'linear':
+        return LatentProjector.load(str(path))
+    else:  # nonlinear
+        return NonlinearLatentProjector.load(str(path))
+
+
+# ============================================================================
 # GENERATE INITIAL STATES
 # ============================================================================
 
 # Define the ranges for each dimension
-cart_positions = [-1, 0, 1]
-angles_degrees = np.linspace(0, 360, 8)[:-1]
+cart_positions = [0]
+angles_degrees = np.linspace(0, 360, 9)[:-1]
 angles_radians = np.deg2rad(angles_degrees)
 
 # Generate all combinations
@@ -82,21 +143,11 @@ for cart_pos, angle_radians in product(cart_positions, angles_radians):
 INITIAL_STATES = np.array(all_combinations)
 
 # Base directory for saving results
-BASE_SAVE_DIR = 'logs/26-01-22-cartpole_swingup-projected_sweep'
+BASE_SAVE_DIR = 'logs/26-01-26-cartpole_swingup-projected_sweep_uniform_data_pixelv2'
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
-
-
-def load_projector(k: int) -> LatentProjector:
-    """Load a pre-fitted projector from disk."""
-    projector_path = PROJECTORS_DIR / f'projector_k{k}.pt'
-    if not projector_path.exists():
-        raise FileNotFoundError(
-            f"Projector not found: {projector_path}\n"
-            f"Please fit projectors first and save them to {PROJECTORS_DIR}")
-    return LatentProjector.load(str(projector_path), device=str(DEVICE))
 
 
 def setup_projected_agent(cfg, projector):
@@ -105,7 +156,7 @@ def setup_projected_agent(cfg, projector):
     
     Args:
         cfg: Configuration object
-        projector: LatentProjector instance
+        projector: LatentProjector or NonlinearLatentProjector instance
         
     Returns:
         env: Environment instance
@@ -146,17 +197,22 @@ def setup_baseline_agent(cfg):
 
 
 def main():
+    # Get all projector configurations
+    projector_configs = get_projector_configs()
+
     print("=" * 80)
     print("PROJECTED TDMPC2 SWEEP")
     print("=" * 80)
     print(f"Task: {override_cfg['task']}")
     print(f"Checkpoint: {CHECKPOINT_PATH}")
     print(f"Projectors directory: {PROJECTORS_DIR}")
-    print(f"K values: {K_VALUES}")
     print(f"Run baseline: {RUN_BASELINE}")
     print(f"Total initial states: {len(INITIAL_STATES)}")
     print(f"Seeds: {SEEDS}")
     print(f"Base save directory: {BASE_SAVE_DIR}")
+    print(f"\nProjector configurations ({len(projector_configs)} total):")
+    for cfg_proj in projector_configs:
+        print(f"  - {cfg_proj['name']} ({cfg_proj['type']}, k={cfg_proj['k']})")
     print("=" * 80)
 
     # Verify checkpoint exists
@@ -164,12 +220,16 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found: {CHECKPOINT_PATH}")
     print(f"✓ Found checkpoint: {CHECKPOINT_PATH}")
 
-    # Verify projectors exist
-    print("\nVerifying projectors...")
+    # Verify and load projectors
+    print("\nVerifying and loading projectors...")
     projectors = {}
-    for k in K_VALUES:
-        projectors[k] = load_projector(k)
-        print(f"  ✓ Loaded: projector_k{k}.pt")
+    for cfg_proj in projector_configs:
+        try:
+            projectors[cfg_proj['name']] = load_projector(cfg_proj)
+            print(f"  ✓ Loaded: {cfg_proj['name']} ({cfg_proj['path'].name})")
+        except FileNotFoundError as e:
+            print(f"  ✗ Missing: {cfg_proj['name']} ({cfg_proj['path'].name})")
+            raise e
 
     # Initialize Hydra config
     with initialize(config_path="../tdmpc2", version_base=None):
@@ -185,16 +245,45 @@ def main():
     print("RUNNING SWEEP")
     print("=" * 80 + "\n")
 
-    # Determine what to sweep over
+    # Determine what to sweep over (projectors first, then baseline)
+    sweep_configs = []
+
+    for cfg_proj in projector_configs:
+        sweep_configs.append({
+            'name': cfg_proj['name'],
+            'projector': projectors[cfg_proj['name']],
+            'metadata': {
+                'name': cfg_proj['name'],
+                'path': str(cfg_proj['path']),  # Convert Path to string here
+                'type': cfg_proj['type'],
+                'method': cfg_proj['method'],
+                'k': cfg_proj['k'],
+                'k_supervised': cfg_proj.get('k_supervised'),
+                'k_unsupervised': cfg_proj.get('k_unsupervised'),
+            },
+        })
+
+    # Add baseline at the end
     if RUN_BASELINE:
-        sweep_configs = [('baseline', None)] + [(f'k{k}', k) for k in K_VALUES]
-    else:
-        sweep_configs = [(f'k{k}', k) for k in K_VALUES]
+        sweep_configs.append({
+            'name': 'baseline',
+            'projector': None,
+            'metadata': {
+                'name': 'baseline',
+                'type': 'none',
+                'method': 'none',
+                'k': None,
+            }
+        })
 
     total_episodes = len(sweep_configs) * len(INITIAL_STATES) * len(SEEDS)
     episode_count = 0
 
-    for config_name, k_value in sweep_configs:
+    for sweep_cfg in sweep_configs:
+        config_name = sweep_cfg['name']
+        projector = sweep_cfg.get('projector')
+        proj_metadata = sweep_cfg.get('metadata', {})
+
         print("\n" + "=" * 80)
         print(f"CONFIG: {config_name}")
         print("=" * 80)
@@ -222,16 +311,16 @@ def main():
                 }
 
                 # Create environment and agent
-                if k_value is None:
+                if projector is None:
                     # Baseline: use RecordingTDMPC2
                     env, agent = setup_baseline_agent(cfg)
                 else:
                     # Projected agent
-                    env, agent = setup_projected_agent(cfg, projectors[k_value])
+                    env, agent = setup_projected_agent(cfg, projector)
 
                 # Create episode-specific save directory
                 time = datetime.now().strftime("%Y%m%d_%H%M%S")
-                episode_dir = Path(BASE_SAVE_DIR) / config_name / time
+                episode_dir = Path(BASE_SAVE_DIR) / time
                 activations_dir = episode_dir / 'activations'
                 activations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -258,8 +347,8 @@ def main():
                     'initial_state': initial_state.tolist(),
                     'checkpoint': str(cfg.checkpoint),
                     'task': cfg.task,
-                    'config': config_name,
-                    'k': k_value,
+                    'config_name': config_name,
+                    'projector_config': proj_metadata,  # Already serializable
                 }
                 episode_recorder.save_episode(metadata=metadata)
                 print(f"  → Saved to: {activations_dir}")
