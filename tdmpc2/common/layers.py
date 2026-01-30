@@ -47,6 +47,8 @@ class ShiftAug(nn.Module):
 
     def forward(self, x):
         x = x.float()
+        if not self.training:
+            return x  # Skip augmentation during inference
         n, _, h, w = x.size()
         assert h == w
         x = F.pad(x, self.padding, 'replicate')
